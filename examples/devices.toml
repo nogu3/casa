@@ -1,0 +1,18 @@
+# casa 設定ファイルのサンプル。値はすべてダミー（RFC 5737 の 192.0.2.0/24）。
+# 実運用の設定は別リポジトリで管理し、~/.config/casa/devices.toml に配置する。
+
+version = 1
+
+[devices.living_aircon]
+protocol = "echonet"
+ip = "192.0.2.10"
+eoj = "0x013001"
+
+[devices.bedroom_light]
+protocol = "echonet"
+ip = "192.0.2.11"
+eoj = "0x029101"
+
+[devices.entry_lock]
+protocol = "switchbot"
+device_id = "DUMMY-XX-XX"
