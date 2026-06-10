@@ -1,7 +1,9 @@
 mod cli;
 mod config;
 mod error;
+mod ops;
 mod output;
+mod runner;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -27,16 +29,19 @@ fn main() {
 fn run(cli: Cli) -> Result<(), CasaError> {
     let config = config::load(cli.config.as_deref())?;
 
-    match cli.command {
+    let response = match cli.command {
         Command::List => {
             let devices = config
                 .devices
                 .iter()
                 .map(|(name, device)| output::device_entry(name, device))
                 .collect();
-            output::emit(&output::list_response(devices));
+            output::list_response(devices)
         }
-    }
+        Command::Get { name, epc } => ops::get(&config, &name, &epc)?,
+        Command::Set { name, epc, value } => ops::set(&config, &name, &epc, &value)?,
+    };
 
+    output::emit(&response);
     Ok(())
 }

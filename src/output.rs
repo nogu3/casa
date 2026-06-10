@@ -29,7 +29,6 @@ pub fn device_entry(name: &str, device: &Device) -> Value {
 }
 
 /// デバイス操作（get / set / on / off）の応答。
-#[allow(dead_code)] // Phase 1 で使用
 pub fn device_response(name: &str, device: &Device, value: Value) -> Value {
     json!({
         "timestamp": timestamp(),

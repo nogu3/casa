@@ -7,7 +7,6 @@ use std::fmt;
 
 /// エラー種別。stderr の `kind` フィールドと exit code の唯一の対応表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // 子 CLI 系 variant は Phase 1 で使用
 pub enum ErrorKind {
     /// 設定ファイルが存在しない。
     ConfigMissing,
