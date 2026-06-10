@@ -38,6 +38,16 @@ pub fn device_response(name: &str, device: &Device, value: Value) -> Value {
     })
 }
 
+/// `casa describe` の応答。
+pub fn describe_response(name: &str, device: &Device, properties: Value) -> Value {
+    json!({
+        "timestamp": timestamp(),
+        "device": name,
+        "protocol": device.protocol(),
+        "properties": properties,
+    })
+}
+
 /// stdout に 1 行 JSON として出力する。
 pub fn emit(value: &Value) {
     println!("{value}");

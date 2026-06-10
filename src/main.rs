@@ -30,16 +30,24 @@ fn run(cli: Cli) -> Result<(), CasaError> {
     let config = config::load(cli.config.as_deref())?;
 
     let response = match cli.command {
-        Command::List => {
-            let devices = config
-                .devices
-                .iter()
-                .map(|(name, device)| output::device_entry(name, device))
-                .collect();
+        Command::List { describe } => {
+            let mut devices = Vec::with_capacity(config.devices.len());
+            for (name, device) in &config.devices {
+                let mut entry = output::device_entry(name, device);
+                if describe {
+                    // introspection 未対応のプロトコルは properties: null。
+                    entry["properties"] =
+                        ops::describe_device(&config, device)?.unwrap_or(serde_json::Value::Null);
+                }
+                devices.push(entry);
+            }
             output::list_response(devices)
         }
         Command::Get { name, epc } => ops::get(&config, &name, &epc)?,
         Command::Set { name, epc, value } => ops::set(&config, &name, &epc, &value)?,
+        Command::Describe { name } => ops::describe(&config, &name)?,
+        Command::On { name } => ops::power(&config, &name, true)?,
+        Command::Off { name } => ops::power(&config, &name, false)?,
     };
 
     output::emit(&response);

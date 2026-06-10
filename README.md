@@ -17,6 +17,16 @@ casa get living_aircon 0x80
 
 # プロパティの書き込み
 casa set living_aircon 0x80 0x30
+
+# 電源 ON / OFF のショートカット
+casa on living_aircon
+casa off living_aircon
+
+# プロパティマップ（introspection）
+casa describe living_aircon
+
+# 一覧に各デバイスのプロパティマップを含める（その場で取得。永続キャッシュなし）
+casa list --describe
 ```
 
 stdout には純粋な構造化 JSON のみを出す。`timestamp`（ISO 8601）を必ず含む。
@@ -85,7 +95,21 @@ casa が呼ぶ enl のインターフェース（enl の出荷に合わせて追
 ```
 enl get --ip <ip> --eoj <eoj> --epc <epc>
 enl set --ip <ip> --eoj <eoj> --epc <epc> --value <value>
+enl describe --ip <ip> --eoj <eoj>
 ```
+
+### `on` / `off` の対応状況とマッピング先
+
+ショートカットのマッピングはプロトコルロジックではなく UX として casa 内に
+ハードコードしている。
+
+| プロトコル | `on` | `off` | マッピング先 |
+|---|---|---|---|
+| ECHONET Lite | ○ | ○ | EPC `0x80` に `0x30`（ON）/ `0x31`（OFF）を set |
+| SwitchBot | × | × | 未対応（Phase 4 でアダプタ追加時に対応） |
+
+`describe` も同様: ECHONET Lite は `enl describe`（プロパティマップ）、SwitchBot は未対応
+（`casa describe` は exit 14、`casa list --describe` では `properties: null`）。
 
 バイナリの解決は `PATH` が既定。以下で上書きできる（環境変数が優先）:
 

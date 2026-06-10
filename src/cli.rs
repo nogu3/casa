@@ -18,7 +18,27 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// 設定済みデバイスの一覧を JSON で出力する
-    List,
+    List {
+        /// 各デバイスのプロパティマップを子 CLI から取得して含める
+        /// （その場で取得するだけで、永続キャッシュはしない）
+        #[arg(long)]
+        describe: bool,
+    },
+    /// デバイスのプロパティマップ（introspection）を出力する
+    Describe {
+        /// 設定ファイル上のデバイス名
+        name: String,
+    },
+    /// デバイスの電源を入れる（ECHONET Lite: EPC 0x80 = 0x30）
+    On {
+        /// 設定ファイル上のデバイス名
+        name: String,
+    },
+    /// デバイスの電源を切る（ECHONET Lite: EPC 0x80 = 0x31）
+    Off {
+        /// 設定ファイル上のデバイス名
+        name: String,
+    },
     /// デバイスのプロパティを読む（ECHONET Lite なら EPC 指定）
     Get {
         /// 設定ファイル上のデバイス名
