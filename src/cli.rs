@@ -19,4 +19,20 @@ pub struct Cli {
 pub enum Command {
     /// 設定済みデバイスの一覧を JSON で出力する
     List,
+    /// デバイスのプロパティを読む（ECHONET Lite なら EPC 指定）
+    Get {
+        /// 設定ファイル上のデバイス名
+        name: String,
+        /// プロパティ識別子（例: 0x80）。子 CLI にそのまま渡す
+        epc: String,
+    },
+    /// デバイスのプロパティに書き込む
+    Set {
+        /// 設定ファイル上のデバイス名
+        name: String,
+        /// プロパティ識別子（例: 0x80）。子 CLI にそのまま渡す
+        epc: String,
+        /// 書き込む値（例: 0x30）。子 CLI にそのまま渡す
+        value: String,
+    },
 }

@@ -21,7 +21,6 @@ pub struct Config {
     /// 子 CLI バイナリのフルパス上書き（例: `enl = "/opt/bin/enl"`）。
     /// 環境変数 `CASA_<BIN>_BIN` の方が優先される。
     #[serde(default)]
-    #[allow(dead_code)] // Phase 1 で使用
     pub binaries: BTreeMap<String, String>,
 }
 
@@ -35,7 +34,6 @@ pub enum Device {
 }
 
 impl Device {
-    #[allow(dead_code)] // Phase 1 で使用
     pub fn protocol(&self) -> &'static str {
         match self {
             Device::Echonet { .. } => "echonet",
@@ -46,7 +44,6 @@ impl Device {
 
 impl Config {
     /// 名前からデバイスを引く。無ければ exit code 11 相当のエラー。
-    #[allow(dead_code)] // Phase 1 で使用
     pub fn device(&self, name: &str) -> Result<&Device, CasaError> {
         self.devices.get(name).ok_or_else(|| {
             CasaError::new(
