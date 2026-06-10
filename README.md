@@ -168,6 +168,16 @@ cargo clippy -- -D warnings
 RUST_LOG=debug cargo run -- list --config examples/devices.toml
 ```
 
+### 新しいプロトコルの追加
+
+プロトコル固有の知識は `src/adapter/` に閉じている。新プロトコルの追加は次の 3 点だけで、
+サブコマンドハンドラ（`src/main.rs` / `src/ops.rs`）は変更しない:
+
+1. `src/config.rs` の `Device` enum に variant を追加する。
+2. `src/adapter/` にその variant の子 CLI 引数を組むアダプタを実装し、
+   `adapter_for` に 1 行足す。
+3. アダプタのユニットテストを追加する。
+
 CI では実 enl を使わない。統合テストは `tests/fixtures/` のダミー enl
 （固定 JSON を吐くシェルスクリプト）で行う。
 
