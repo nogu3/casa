@@ -16,3 +16,9 @@ eoj = "0x029101"
 [devices.entry_lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+
+# node_id は mat（https://github.com/nogu3/mat）で commission 済みであること。
+# endpoint は省略時 1。
+[devices.hall_light]
+protocol = "matter"
+node_id = 5

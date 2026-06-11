@@ -6,8 +6,10 @@
 //! 3. アダプタのテストを追加する。
 
 pub mod echonet;
+pub mod matter;
 
 use crate::config::Device;
+use crate::error::{CasaError, ErrorKind};
 
 /// 子 CLI の 1 回分の呼び出し。バイナリの実パス解決（PATH / `CASA_<BIN>_BIN` /
 /// `[binaries]`）は runner の責務なので、ここでは論理名だけを持つ。
@@ -19,28 +21,31 @@ pub struct Invocation {
 
 /// プロトコル固有 CLI への引数組み立てを担う。プロトコルの知識はここに閉じる。
 ///
-/// 未対応の操作は `None` を返し、呼び出し側（ops 層)が `protocol_unsupported`
-/// （exit 14）に変換する。既定はすべて未対応なので、アダプタは対応する操作だけ
-/// 実装すればよい。
+/// 既定実装はすべて `protocol_unsupported`（exit 14）を返すので、アダプタは
+/// 対応する操作だけ実装すればよい。プロトコル固有の引数形式エラーは
+/// `invalid_argument`（exit 2）で返す。
 pub trait Adapter {
-    fn get(&self, device: &Device, epc: &str) -> Option<Invocation> {
-        let _ = (device, epc);
-        None
+    /// プロトコル名（エラーメッセージ用）。
+    fn protocol(&self) -> &'static str;
+
+    fn get(&self, device: &Device, property: &str) -> Result<Invocation, CasaError> {
+        let _ = (device, property);
+        Err(unsupported(self.protocol(), "get"))
     }
 
-    fn set(&self, device: &Device, epc: &str, value: &str) -> Option<Invocation> {
-        let _ = (device, epc, value);
-        None
+    fn set(&self, device: &Device, property: &str, value: &str) -> Result<Invocation, CasaError> {
+        let _ = (device, property, value);
+        Err(unsupported(self.protocol(), "set"))
     }
 
-    fn describe(&self, device: &Device) -> Option<Invocation> {
+    fn describe(&self, device: &Device) -> Result<Invocation, CasaError> {
         let _ = device;
-        None
+        Err(unsupported(self.protocol(), "describe"))
     }
 
-    fn power(&self, device: &Device, on: bool) -> Option<Invocation> {
-        let _ = (device, on);
-        None
+    fn power(&self, device: &Device, on: bool) -> Result<Invocation, CasaError> {
+        let _ = device;
+        Err(unsupported(self.protocol(), if on { "on" } else { "off" }))
     }
 }
 
@@ -49,9 +54,18 @@ pub trait Adapter {
 pub fn adapter_for(device: &Device) -> Option<&'static dyn Adapter> {
     match device {
         Device::Echonet { .. } => Some(&echonet::EchonetAdapter),
-        // Phase 4: 公式 switchbot CLI（@switchbot/openapi-cli）を呼ぶアダプタを追加する。
+        Device::Matter { .. } => Some(&matter::MatterAdapter),
+        // 公式 switchbot CLI（@switchbot/openapi-cli）を呼ぶアダプタを追加予定。
         Device::Switchbot { .. } => None,
     }
+}
+
+/// 未対応操作のエラー（exit 14）。
+pub fn unsupported(protocol: &str, operation: &str) -> CasaError {
+    CasaError::new(
+        ErrorKind::ProtocolUnsupported,
+        format!("operation \"{operation}\" is not yet supported for protocol \"{protocol}\""),
+    )
 }
 
 #[cfg(test)]
@@ -66,6 +80,16 @@ mod tests {
         };
         let adapter = adapter_for(&device).unwrap();
         assert_eq!(adapter.get(&device, "0x80").unwrap().bin, "enl");
+    }
+
+    #[test]
+    fn matter_devices_dispatch_to_matter_adapter() {
+        let device = Device::Matter {
+            node_id: 5,
+            endpoint: 1,
+        };
+        let adapter = adapter_for(&device).unwrap();
+        assert_eq!(adapter.describe(&device).unwrap().bin, "mat");
     }
 
     #[test]

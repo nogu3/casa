@@ -29,8 +29,24 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum Device {
-    Echonet { ip: String, eoj: String },
-    Switchbot { device_id: String },
+    Echonet {
+        ip: String,
+        eoj: String,
+    },
+    Switchbot {
+        device_id: String,
+    },
+    Matter {
+        /// mat の認証情報ストアに commission 済みの node_id。
+        node_id: u64,
+        /// エンドポイント番号（省略時 1）。
+        #[serde(default = "default_matter_endpoint")]
+        endpoint: u16,
+    },
+}
+
+fn default_matter_endpoint() -> u16 {
+    1
 }
 
 impl Device {
@@ -38,6 +54,7 @@ impl Device {
         match self {
             Device::Echonet { .. } => "echonet",
             Device::Switchbot { .. } => "switchbot",
+            Device::Matter { .. } => "matter",
         }
     }
 }
@@ -125,13 +142,17 @@ eoj = "0x013001"
 [devices.entry_lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+
+[devices.hall_light]
+protocol = "matter"
+node_id = 5
 "#;
 
     #[test]
     fn parses_valid_config() {
         let config = parse(VALID).unwrap();
         assert_eq!(config.version, 1);
-        assert_eq!(config.devices.len(), 2);
+        assert_eq!(config.devices.len(), 3);
         match config.device("living_aircon").unwrap() {
             Device::Echonet { ip, eoj } => {
                 assert_eq!(ip, "192.0.2.10");
@@ -143,6 +164,45 @@ device_id = "DUMMY-XX-XX"
             Device::Switchbot { device_id } => assert_eq!(device_id, "DUMMY-XX-XX"),
             other => panic!("unexpected device: {other:?}"),
         }
+        match config.device("hall_light").unwrap() {
+            Device::Matter { node_id, endpoint } => {
+                assert_eq!(*node_id, 5);
+                // endpoint 省略時は 1。
+                assert_eq!(*endpoint, 1);
+            }
+            other => panic!("unexpected device: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matter_endpoint_can_be_specified() {
+        let text = r#"
+version = 1
+[devices.x]
+protocol = "matter"
+node_id = 7
+endpoint = 2
+"#;
+        let config = parse(text).unwrap();
+        match config.device("x").unwrap() {
+            Device::Matter { node_id, endpoint } => {
+                assert_eq!(*node_id, 7);
+                assert_eq!(*endpoint, 2);
+            }
+            other => panic!("unexpected device: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matter_missing_node_id_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.x]
+protocol = "matter"
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("node_id"), "detail: {}", err.detail);
     }
 
     #[test]

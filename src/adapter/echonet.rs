@@ -2,6 +2,7 @@
 
 use super::{Adapter, Invocation};
 use crate::config::Device;
+use crate::error::{CasaError, ErrorKind};
 
 const BIN: &str = "enl";
 
@@ -15,10 +16,16 @@ pub struct EchonetAdapter;
 
 /// デバイス定義から (ip, eoj) を取り出す。dispatch は `adapter_for` が variant で
 /// 行うので、他 variant が来ることはない。
-fn address(device: &Device) -> Option<(&str, &str)> {
+fn address(device: &Device) -> Result<(&str, &str), CasaError> {
     match device {
-        Device::Echonet { ip, eoj } => Some((ip, eoj)),
-        _ => None,
+        Device::Echonet { ip, eoj } => Ok((ip, eoj)),
+        other => Err(CasaError::new(
+            ErrorKind::ProtocolUnsupported,
+            format!(
+                "echonet adapter received a \"{}\" device (dispatch bug)",
+                other.protocol()
+            ),
+        )),
     }
 }
 
@@ -30,24 +37,30 @@ fn invocation(parts: &[&str]) -> Invocation {
 }
 
 impl Adapter for EchonetAdapter {
-    fn get(&self, device: &Device, epc: &str) -> Option<Invocation> {
-        let (ip, eoj) = address(device)?;
-        Some(invocation(&["get", "--ip", ip, "--eoj", eoj, "--epc", epc]))
+    fn protocol(&self) -> &'static str {
+        "echonet"
     }
 
-    fn set(&self, device: &Device, epc: &str, value: &str) -> Option<Invocation> {
+    fn get(&self, device: &Device, property: &str) -> Result<Invocation, CasaError> {
         let (ip, eoj) = address(device)?;
-        Some(invocation(&[
-            "set", "--ip", ip, "--eoj", eoj, "--epc", epc, "--value", value,
+        Ok(invocation(&[
+            "get", "--ip", ip, "--eoj", eoj, "--epc", property,
         ]))
     }
 
-    fn describe(&self, device: &Device) -> Option<Invocation> {
+    fn set(&self, device: &Device, property: &str, value: &str) -> Result<Invocation, CasaError> {
         let (ip, eoj) = address(device)?;
-        Some(invocation(&["describe", "--ip", ip, "--eoj", eoj]))
+        Ok(invocation(&[
+            "set", "--ip", ip, "--eoj", eoj, "--epc", property, "--value", value,
+        ]))
     }
 
-    fn power(&self, device: &Device, on: bool) -> Option<Invocation> {
+    fn describe(&self, device: &Device) -> Result<Invocation, CasaError> {
+        let (ip, eoj) = address(device)?;
+        Ok(invocation(&["describe", "--ip", ip, "--eoj", eoj]))
+    }
+
+    fn power(&self, device: &Device, on: bool) -> Result<Invocation, CasaError> {
         let value = if on { POWER_ON } else { POWER_OFF };
         self.set(device, POWER_EPC, value)
     }

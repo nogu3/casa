@@ -35,7 +35,7 @@ casa から呼ばれる前提のプロトコル固有 CLI は、以下の方針�
 |---|---|---|
 | ECHONET Lite | `enl` | 自作・開発中（独立リポジトリ） |
 | SwitchBot | `switchbot` | 公式 CLI を利用（`@switchbot/openapi-cli`、OpenAPI 経由）。将来自作に切り替える可能性あり。 |
-| Matter | 未定（`mat` 候補） | 未着手。`mtr` は既存 network diagnostic と衝突するため使わない |
+| Matter | `mat` | 自作・出荷済み（独立リポジトリ https://github.com/nogu3/mat 。chip-tool ラッパー）。casa 対応済み |
 
 casa は **これらが `PATH` 上に存在すること**を前提とする。
 
@@ -328,7 +328,11 @@ Claude Code が casa を実装するときのリファレンス。フェーズ�
 
 - **SwitchBot**: 公式 `switchbot` CLI（`@switchbot/openapi-cli`）を呼ぶアダプタを書く。**自作 CLI は書かない**。認証は公式 CLI 側が完結させるので casa は credentials を扱わない（環境変数や設定ファイルから何かを渡す必要も基本的にない）。OpenAPI 経由＝クラウド往復のためレイテンシ特性が enl と異なる点だけ呼び出し側に伝える。
   - 将来、BLE 直接制御やローカル完結が必要になった場合は自作 CLI（`sbl` 等）に切り替える可能性がある。その場合も casa 側は `protocol = "switchbot"` のディスパッチ先バイナリを変えるだけで済むよう、アダプタは公式 CLI の存在を前提に閉じ込めること。
-- **Matter**: Matter CLI 出荷時に追加。同じくアダプタ 1 個。
+- **Matter**: **対応済み**。自作 `mat`（https://github.com/nogu3/mat）を呼ぶアダプタを実装した。
+  - 設定は `protocol = "matter"` + `node_id`（mat 側で commission 済み前提）+ `endpoint`（省略時 1）。
+  - `get`/`set` のプロパティは `<cluster>/<attribute>`（chip-tool 表記、例 `onoff/on-off`）。casa 側で分解して `mat read/write` に渡す。
+  - `on`/`off` は `mat on/off <node_id> --endpoint <ep>` に委譲（OnOff は属性 write でなくコマンド invoke だが、その非対称性は mat が吸収）。
+  - commission / discover / open-window / group は casa でラップしない（discover 同様、mat を直接叩く運用）。
 
 ---
 

@@ -14,6 +14,9 @@ pub enum ErrorKind {
     ConfigParse,
     /// 指定された名前が設定ファイルに無い。
     NameNotFound,
+    /// プロトコル固有の引数形式が不正（例: matter のプロパティが
+    /// `<cluster>/<attribute>` 形式でない）。clap の引数エラーと同じ exit 2。
+    InvalidArgument,
     /// 子 CLI バイナリが見つからない / 実行不可。
     ChildNotFound,
     /// 子 CLI が非ゼロ exit code で終了した。コードはそのまま伝播する。
@@ -30,6 +33,7 @@ impl ErrorKind {
             ErrorKind::ConfigMissing => "config_missing",
             ErrorKind::ConfigParse => "config_parse",
             ErrorKind::NameNotFound => "name_not_found",
+            ErrorKind::InvalidArgument => "invalid_argument",
             ErrorKind::ChildNotFound => "child_not_found",
             ErrorKind::ChildFailed(_) => "child_failed",
             ErrorKind::ChildInvalidOutput => "child_invalid_output",
@@ -41,6 +45,7 @@ impl ErrorKind {
         match self {
             ErrorKind::ConfigMissing | ErrorKind::ConfigParse => 10,
             ErrorKind::NameNotFound => 11,
+            ErrorKind::InvalidArgument => 2,
             ErrorKind::ChildNotFound => 12,
             ErrorKind::ChildFailed(code) => *code,
             ErrorKind::ChildInvalidOutput => 13,
@@ -96,6 +101,7 @@ mod tests {
         assert_eq!(ErrorKind::ConfigMissing.exit_code(), 10);
         assert_eq!(ErrorKind::ConfigParse.exit_code(), 10);
         assert_eq!(ErrorKind::NameNotFound.exit_code(), 11);
+        assert_eq!(ErrorKind::InvalidArgument.exit_code(), 2);
         assert_eq!(ErrorKind::ChildNotFound.exit_code(), 12);
         assert_eq!(ErrorKind::ChildFailed(3).exit_code(), 3);
         assert_eq!(ErrorKind::ChildFailed(4).exit_code(), 4);

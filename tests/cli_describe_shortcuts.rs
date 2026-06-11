@@ -125,19 +125,25 @@ fn list_describe_includes_property_maps() {
     let (config, _dir) = setup();
     let out = run_casa(
         &["list", "--describe", "--config", &config],
-        &[("CASA_ENL_BIN", &fixture("enl_describe.sh"))],
+        &[
+            ("CASA_ENL_BIN", &fixture("enl_describe.sh")),
+            ("CASA_MAT_BIN", &fixture("mat_describe.sh")),
+        ],
     );
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
     let devices = v["devices"].as_array().unwrap();
-    assert_eq!(devices.len(), 3);
+    assert_eq!(devices.len(), 5);
 
     let aircon = devices
         .iter()
         .find(|d| d["name"] == "living_aircon")
         .unwrap();
     assert_eq!(aircon["properties"]["get"][0], "0x80");
+
+    let hall = devices.iter().find(|d| d["name"] == "hall_light").unwrap();
+    assert_eq!(hall["properties"]["endpoints"][0]["endpoint"], 0);
 
     // introspection 未対応プロトコルは properties: null。
     let lock = devices.iter().find(|d| d["name"] == "entry_lock").unwrap();

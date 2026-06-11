@@ -15,7 +15,7 @@ fn list_outputs_all_devices_as_json() {
     let v = stdout_json(&out);
     assert!(v["timestamp"].is_string(), "timestamp missing: {v}");
     let devices = v["devices"].as_array().unwrap();
-    assert_eq!(devices.len(), 3);
+    assert_eq!(devices.len(), 5);
 
     let aircon = devices
         .iter()
@@ -37,7 +37,7 @@ fn config_path_can_come_from_env() {
 
     let out = run_casa(&["list"], &[("CASA_CONFIG", config.to_str().unwrap())]);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout_json(&out)["devices"].as_array().unwrap().len(), 3);
+    assert_eq!(stdout_json(&out)["devices"].as_array().unwrap().len(), 5);
 }
 
 #[test]
@@ -85,5 +85,5 @@ fn example_config_in_repo_is_valid() {
     let out = run_casa(&["list", "--config", example], &[]);
     assert_eq!(out.status.code(), Some(0));
     let v = stdout_json(&out);
-    assert_eq!(v["devices"].as_array().unwrap().len(), 3);
+    assert_eq!(v["devices"].as_array().unwrap().len(), 4);
 }
