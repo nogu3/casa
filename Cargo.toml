@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/casa-core", "crates/casa"]
+members = ["crates/casa-core", "crates/casa", "crates/casad"]
 
 [workspace.package]
 version = "0.1.0"

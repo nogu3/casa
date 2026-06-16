@@ -118,6 +118,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "casad"
+version = "0.1.0"
+dependencies = [
+ "casa-core",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
