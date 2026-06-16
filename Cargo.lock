@@ -122,6 +122,7 @@ name = "casad"
 version = "0.1.0"
 dependencies = [
  "casa-core",
+ "chrono",
  "clap",
  "serde",
  "serde_json",

@@ -37,10 +37,21 @@ pub enum Command {
         /// 設定ファイル上のデバイス名
         name: String,
     },
-    /// ルールファイルをパースし、参照デバイスが設定に存在するか検証する。
+    /// ルールファイルをパースし、参照デバイスが設定に存在するか・時刻が正しいか検証する。
     /// エンジンに載せる前にルールの正しさを確認する用途。
     Check {
         /// ルールファイル（rules.toml）のパス
         rules: PathBuf,
+    },
+    /// ルールエンジンを起動する。既定は常駐し、毎分の境界で時刻トリガを評価する。
+    Run {
+        /// ルールファイル（rules.toml）のパス
+        rules: PathBuf,
+        /// 1 回だけ評価して終了する（cron から毎分呼ぶ運用、またはデバッグ用）。
+        #[arg(long)]
+        once: bool,
+        /// 現在時刻を HH:MM で上書きする（`--once` 併用のデバッグ用）。
+        #[arg(long, value_name = "HH:MM", requires = "once")]
+        now: Option<String>,
     },
 }
