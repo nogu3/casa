@@ -1,0 +1,17 @@
+[package]
+name = "casa-core"
+description = "casa の共有ロジック（設定ロード・名前解決・アダプタ・子 CLI ランナー）。casa バイナリと casad が link する。"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -81,7 +81,8 @@ fn invalid_cli_args_exit_2() {
 
 #[test]
 fn example_config_in_repo_is_valid() {
-    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/devices.toml");
+    // examples/ は workspace ルート直下のサンプル（README 参照）。casa crate からは 2 つ上。
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/devices.toml");
     let out = run_casa(&["list", "--config", example], &[]);
     assert_eq!(out.status.code(), Some(0));
     let v = stdout_json(&out);

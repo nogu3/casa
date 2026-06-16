@@ -1,16 +1,12 @@
-mod adapter;
 mod cli;
-mod config;
-mod error;
-mod ops;
-mod output;
-mod runner;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
+use casa_core::error::CasaError;
+use casa_core::{config, ops, output};
+
 use crate::cli::{Cli, Command};
-use crate::error::CasaError;
 
 fn main() {
     // 診断ログは stderr に構造化（JSON）で出す。レベルは RUST_LOG で制御。

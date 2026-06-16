@@ -98,14 +98,23 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 name = "casa"
 version = "0.1.0"
 dependencies = [
- "chrono",
+ "casa-core",
  "clap",
+ "serde_json",
+ "tempfile",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "casa-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
