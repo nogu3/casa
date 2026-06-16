@@ -1,17 +1,20 @@
 //! casad の clap 定義。引数エラーは clap 既定の exit code 2。
 //!
-//! W1 時点では雛形。提供するのは「アクション実行プリミティブ」`exec` のみで、
-//! これは後段（W2: DSL、W3: ルールエンジン）が発火時に呼ぶ実行経路の最小形。
+//! W1/W2 時点では雛形。提供するのは「アクション実行プリミティブ」`exec` と、
+//! ルールファイルの「読込・検証」`check`。どちらも後段（W3: ルールエンジン）が
+//! 内部で使う経路の最小形を CLI として露出したもの。
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
+
+use crate::action::Action;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "casad",
     version,
-    about = "casa 上の常駐レイヤ（DSL ルールエンジン）。W1 時点では雛形。"
+    about = "casa 上の常駐レイヤ（DSL ルールエンジン）。W2 時点では雛形。"
 )]
 pub struct Cli {
     /// 設定ファイルのパス（既定: $XDG_CONFIG_HOME/casa/devices.toml）。
@@ -34,22 +37,10 @@ pub enum Command {
         /// 設定ファイル上のデバイス名
         name: String,
     },
-}
-
-/// casad が実行できるアクション。casa のサブコマンドへ写像される。
-#[derive(Debug, Clone, Copy, ValueEnum)]
-#[value(rename_all = "lower")]
-pub enum Action {
-    On,
-    Off,
-}
-
-impl Action {
-    /// 対応する casa サブコマンド名。
-    pub fn subcommand(self) -> &'static str {
-        match self {
-            Action::On => "on",
-            Action::Off => "off",
-        }
-    }
+    /// ルールファイルをパースし、参照デバイスが設定に存在するか検証する。
+    /// エンジンに載せる前にルールの正しさを確認する用途。
+    Check {
+        /// ルールファイル（rules.toml）のパス
+        rules: PathBuf,
+    },
 }

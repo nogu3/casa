@@ -123,8 +123,10 @@ version = "0.1.0"
 dependencies = [
  "casa-core",
  "clap",
+ "serde",
  "serde_json",
  "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

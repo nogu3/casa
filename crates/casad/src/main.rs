@@ -1,5 +1,7 @@
+mod action;
 mod casa_runner;
 mod cli;
+mod rules;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -35,8 +37,24 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             config.device(&name)?;
 
             // spawn 側: 実機アクションは casa を子プロセスとして起動し、exit code を伝播する。
-            let args = casa_runner::casa_args(action, &name, cli.config.as_deref());
+            let args = action.casa_args(&name, cli.config.as_deref());
             casa_runner::run_casa(&args)
+        }
+        Command::Check { rules } => {
+            // 設定とルールを読み、参照デバイスがすべて存在するか検証する。
+            let config = config::load(cli.config.as_deref())?;
+            let rule_file = rules::load(&rules)?;
+            rule_file.validate(&config)?;
+
+            // 検証結果のサマリを stdout に JSON で出す。casad が解釈したルールを
+            // そのまま返すことで、UI / LLM が往復（書いた内容の解釈）を確認できる。
+            let summary = serde_json::json!({
+                "ok": true,
+                "count": rule_file.rules.len(),
+                "rules": rule_file.rules,
+            });
+            println!("{summary}");
+            Ok(0)
         }
     }
 }
