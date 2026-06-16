@@ -2,6 +2,7 @@ mod action;
 mod casa_runner;
 mod cli;
 mod engine;
+mod enl;
 mod rules;
 
 use clap::Parser;
@@ -58,15 +59,41 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             println!("{summary}");
             Ok(0)
         }
-        Command::Run { rules, once, now } => {
+        Command::Run {
+            rules,
+            once,
+            now,
+            listen_once,
+        } => {
             // run も check と同じ検証を通してから起動する（不正ルールで常駐させない）。
             let config = config::load(cli.config.as_deref())?;
             let rule_file = rules::load(&rules)?;
             rule_file.validate(&config)?;
             engine::validate_schedule(&rule_file)?;
 
+            // enl バイナリは casa と同じ規約（CASA_ENL_BIN / [binaries] / PATH）で解決する。
+            let enl_bin = casa_core::runner::resolve_bin("enl", &config);
+
+            if listen_once {
+                // イベント側のデバッグ経路: enl listen を 1 回回して評価し終了する。
+                let fired = engine::drain_events_once(
+                    &rule_file,
+                    &config,
+                    &enl_bin,
+                    cli.config.as_deref(),
+                )?;
+                tracing::info!(fired, "single event drain complete");
+                return Ok(0);
+            }
+
             let now = now.map(|s| engine::parse_hm(&s)).transpose()?;
-            engine::run(&rule_file, cli.config.as_deref(), engine::RunOpts { once, now })
+            engine::run(
+                &rule_file,
+                &config,
+                cli.config.as_deref(),
+                &enl_bin,
+                engine::RunOpts { once, now },
+            )
         }
     }
 }

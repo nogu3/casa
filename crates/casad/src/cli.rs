@@ -43,15 +43,20 @@ pub enum Command {
         /// ルールファイル（rules.toml）のパス
         rules: PathBuf,
     },
-    /// ルールエンジンを起動する。既定は常駐し、毎分の境界で時刻トリガを評価する。
+    /// ルールエンジンを起動する。既定は常駐し、時刻トリガ（毎分の境界で評価）と
+    /// イベントトリガ（enl listen を回して状変通知に反応）を並行に走らせる。
     Run {
         /// ルールファイル（rules.toml）のパス
         rules: PathBuf,
-        /// 1 回だけ評価して終了する（cron から毎分呼ぶ運用、またはデバッグ用）。
+        /// 時刻トリガを 1 回だけ評価して終了する（cron 毎分起動、またはデバッグ用）。
         #[arg(long)]
         once: bool,
         /// 現在時刻を HH:MM で上書きする（`--once` 併用のデバッグ用）。
         #[arg(long, value_name = "HH:MM", requires = "once")]
         now: Option<String>,
+        /// enl listen を 1 回だけ起動し、得た通知でイベントトリガを評価して終了する
+        /// （デバッグ用。通知が来るまでブロックする）。
+        #[arg(long, conflicts_with = "once")]
+        listen_once: bool,
     },
 }
