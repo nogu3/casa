@@ -159,27 +159,82 @@ casa 自体のエラーは stderr に 1 行 JSON で出る:
 | `child_invalid_output` | 子 CLI の stdout が JSON でない | 13 |
 | `protocol_unsupported` | そのプロトコルでは未対応の操作 | 14 |
 
+## casad（常駐レイヤ: 自動化ルール）
+
+「A が起きたら B する」「時刻になったら C する」といった自動化は **casa 本体には持たせない**
+（casa はステートレスを維持する）。代わりに同じワークスペースの別バイナリ `casad` が担う。
+詳細は [CLAUDE.md](CLAUDE.md) の「常駐・状態」節を参照。
+
+- **casa** = ステートレスな実行役（CLI）。
+- **casad** = 常駐してルールを評価し、発火時に **casa を子プロセスとして呼ぶ**。設定ロードと
+  名前解決は `casa-core` を共有（link）し、実機アクションは casa に委譲する（ハイブリッド）。
+
+ルールは TOML で書く（書き手は LLM / UI を想定。サンプル: [examples/rules.toml](examples/rules.toml)）:
+
+```toml
+version = 1
+
+# イベントトリガ: living_aircon の電源(EPC 0x80)が ON(0x30) になったら寝室灯を点ける
+[[rules]]
+name = "エアコン起動で寝室灯ON"
+when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
+then = { action = "on", device = "bedroom_light" }
+
+# 時刻トリガ: 毎日 22:00 に寝室灯を消す
+[[rules]]
+name = "22時に寝室消灯"
+when = { at = "22:00" }
+then = { action = "off", device = "bedroom_light" }
+```
+
+```bash
+# ルールをパース・検証し、casad の解釈を JSON で返す
+casad check rules.toml
+
+# 常駐起動（時刻スケジューラ + enl listen のイベントリスナを並行に回す）
+casad run rules.toml
+
+# デバッグ: 時刻トリガを 1 回だけ評価（cron 毎分起動の委譲もこの形）
+casad run rules.toml --once --now 22:00
+
+# デバッグ: enl listen を 1 回だけ回してイベントトリガを評価
+casad run rules.toml --listen-once
+```
+
+イベントトリガは enl の `listen`（INF 通知の待受）をループで回して実現する。enl のバイナリ
+解決・stderr 転送は casa と同じ規約（`CASA_ENL_BIN` / `[binaries]` / `PATH`）に従う。
+
 ## 開発
+
+ワークスペース構成（`crates/`）:
+
+| crate | 種別 | 役割 |
+|---|---|---|
+| `casa-core` | lib | 設定ロード・名前解決・アダプタ・子 CLI ランナー（casa と casad が共有） |
+| `casa` | bin | ステートレス CLI |
+| `casad` | bin | 常駐レイヤ（ルール DSL エンジン） |
 
 ```bash
 cargo build
 cargo test
-cargo clippy -- -D warnings
-RUST_LOG=debug cargo run -- list --config examples/devices.toml
+cargo clippy --workspace -- -D warnings
+RUST_LOG=debug cargo run -p casa -- list --config examples/devices.toml
+RUST_LOG=debug cargo run -p casad -- check examples/rules.toml --config examples/devices.toml
 ```
 
 ### 新しいプロトコルの追加
 
-プロトコル固有の知識は `src/adapter/` に閉じている。新プロトコルの追加は次の 3 点だけで、
-サブコマンドハンドラ（`src/main.rs` / `src/ops.rs`）は変更しない:
+プロトコル固有の知識は `crates/casa-core/src/adapter/` に閉じている。新プロトコルの追加は次の
+3 点だけで、サブコマンドハンドラ（`crates/casa/src/main.rs` / `crates/casa-core/src/ops.rs`）は
+変更しない:
 
-1. `src/config.rs` の `Device` enum に variant を追加する。
-2. `src/adapter/` にその variant の子 CLI 引数を組むアダプタを実装し、
+1. `crates/casa-core/src/config.rs` の `Device` enum に variant を追加する。
+2. `crates/casa-core/src/adapter/` にその variant の子 CLI 引数を組むアダプタを実装し、
    `adapter_for` に 1 行足す。
 3. アダプタのユニットテストを追加する。
 
-CI では実 enl を使わない。統合テストは `tests/fixtures/` のダミー enl
-（固定 JSON を吐くシェルスクリプト）で行う。
+CI では実 enl を使わない。統合テストは `crates/casa/tests/fixtures/`（casa）と
+`crates/casad/tests/fixtures/`（casad: casa / enl の代役スタブ）のダミーで行う。
 
 ### 実機相手の手動 E2E テスト（CI には載せない）
 
