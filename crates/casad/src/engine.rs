@@ -54,9 +54,9 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
     file.rules
         .iter()
         .filter(|r| match &r.when {
-            Trigger::Time { at } => {
-                parse_hm(at).map(|t| (t.hour(), t.minute()) == now_hm).unwrap_or(false)
-            }
+            Trigger::Time { at } => parse_hm(at)
+                .map(|t| (t.hour(), t.minute()) == now_hm)
+                .unwrap_or(false),
             Trigger::Event { .. } => false,
         })
         .collect()
@@ -89,7 +89,12 @@ fn norm_hex(s: &str) -> String {
 /// イベントトリガのルールが、与えられた enl 通知 1 件に一致するか。
 /// device 名を設定で解決し、Echonet 以外（enl の対象外）は一致しない。
 pub fn event_matches(rule: &Rule, config: &Config, event: &enl::Event) -> bool {
-    let Trigger::Event { device, epc, equals } = &rule.when else {
+    let Trigger::Event {
+        device,
+        epc,
+        equals,
+    } = &rule.when
+    else {
         return false;
     };
     let (ip, eoj) = match config.device(device) {
@@ -313,13 +318,29 @@ then = { action = "on", device = "living_aircon" }
         let file = rules(EVENT_RULE);
         let cfg = config_living();
         // EDT 違い（OFF 通知）。
-        assert!(!event_matches(&file.rules[0], &cfg, &event("192.0.2.10", "013001", "80", "31")));
+        assert!(!event_matches(
+            &file.rules[0],
+            &cfg,
+            &event("192.0.2.10", "013001", "80", "31")
+        ));
         // EPC 違い。
-        assert!(!event_matches(&file.rules[0], &cfg, &event("192.0.2.10", "013001", "B0", "30")));
+        assert!(!event_matches(
+            &file.rules[0],
+            &cfg,
+            &event("192.0.2.10", "013001", "B0", "30")
+        ));
         // 送信元 IP 違い。
-        assert!(!event_matches(&file.rules[0], &cfg, &event("192.0.2.99", "013001", "80", "30")));
+        assert!(!event_matches(
+            &file.rules[0],
+            &cfg,
+            &event("192.0.2.99", "013001", "80", "30")
+        ));
         // EOJ 違い。
-        assert!(!event_matches(&file.rules[0], &cfg, &event("192.0.2.10", "029101", "80", "30")));
+        assert!(!event_matches(
+            &file.rules[0],
+            &cfg,
+            &event("192.0.2.10", "029101", "80", "30")
+        ));
     }
 
     #[test]

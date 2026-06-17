@@ -58,8 +58,12 @@ pub struct Then {
 
 /// TOML 文字列をパースし、バージョンを検証する。
 pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
-    let file: RuleFile = toml::from_str(text)
-        .map_err(|e| CasaError::new(ErrorKind::ConfigParse, format!("failed to parse rules: {e}")))?;
+    let file: RuleFile = toml::from_str(text).map_err(|e| {
+        CasaError::new(
+            ErrorKind::ConfigParse,
+            format!("failed to parse rules: {e}"),
+        )
+    })?;
 
     if file.version != SUPPORTED_VERSION {
         return Err(CasaError::new(
@@ -112,9 +116,10 @@ impl RuleFile {
 }
 
 fn check_device(config: &Config, rule_name: &str, device: &str) -> Result<(), CasaError> {
-    config.device(device).map(|_| ()).map_err(|e| {
-        CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail))
-    })
+    config
+        .device(device)
+        .map(|_| ())
+        .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))
 }
 
 #[cfg(test)]
