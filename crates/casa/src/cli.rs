@@ -46,6 +46,11 @@ pub enum Command {
         /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/onoff/on-off`）
         property: String,
     },
+    /// 設定ファイルを読んで妥当性を JSON で報告する（実機は呼ばない）。
+    /// version・必須フィールド・未知プロトコルは読み込み時点で検証済み。
+    /// 加えて、アダプタ未実装のプロトコル（実行時に protocol_unsupported になる）を
+    /// warnings として可視化する。
+    Validate,
     /// デバイスのプロパティに書き込む
     Set {
         /// 設定ファイル上のデバイス名

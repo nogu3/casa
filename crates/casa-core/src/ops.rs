@@ -3,7 +3,10 @@
 //! プロトコル固有の知識はすべて adapter 層にあり、ここはプロトコル非依存。
 //! 新プロトコルを追加してもこのファイルは変更しない。
 
-use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde_json::{json, Value};
 
 use crate::adapter::{self, Adapter, Invocation};
 use crate::config::{Config, Device};
@@ -28,6 +31,30 @@ pub fn set(config: &Config, name: &str, property: &str, value: &str) -> Result<V
         device,
         "set",
     )
+}
+
+/// `casa validate` — 設定の妥当性を JSON で報告する（実機は呼ばない）。
+/// `config::load` を通った時点で version・必須フィールド・未知プロトコルは検証済みなので、
+/// ここでは追加で「アダプタ未実装のプロトコル」を警告として可視化する。設定としては
+/// 妥当だが get/set/on/off が実行時に protocol_unsupported（exit 14）になるため。
+pub fn validate(config: &Config, path: &Path) -> Value {
+    let mut protocols: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut warnings: Vec<Value> = Vec::new();
+    for (name, device) in &config.devices {
+        *protocols.entry(device.protocol()).or_default() += 1;
+        if adapter::adapter_for(device).is_none() {
+            warnings.push(json!({
+                "kind": "no_adapter",
+                "device": name,
+                "protocol": device.protocol(),
+                "detail": format!(
+                    "protocol \"{}\" has no adapter yet; get/set/on/off will fail at runtime",
+                    device.protocol()
+                ),
+            }));
+        }
+    }
+    output::validate_response(path, config.version, config.devices.len(), protocols, warnings)
 }
 
 /// `casa on <name>` / `casa off <name>`
@@ -131,6 +158,37 @@ mod tests {
         assert_eq!(response["device"], "virtual_device");
         assert_eq!(response["value"]["virtual"], true);
         assert!(response["timestamp"].is_string());
+    }
+
+    #[test]
+    fn validate_reports_summary_and_flags_protocols_without_adapter() {
+        let text = r#"
+version = 1
+[devices.aircon]
+protocol = "echonet"
+ip = "192.0.2.10"
+eoj = "0x013001"
+[devices.lock]
+protocol = "switchbot"
+device_id = "DUMMY-XX-XX"
+"#;
+        let config = config::parse(text).unwrap();
+        let report = validate(&config, std::path::Path::new("/tmp/devices.toml"));
+
+        assert_eq!(report["valid"], true);
+        assert_eq!(report["version"], 1);
+        assert_eq!(report["device_count"], 2);
+        assert_eq!(report["config"], "/tmp/devices.toml");
+        assert_eq!(report["protocols"]["echonet"], 1);
+        assert_eq!(report["protocols"]["switchbot"], 1);
+        assert!(report["timestamp"].is_string());
+
+        // switchbot はアダプタ未実装なので no_adapter 警告が 1 件だけ出る。
+        let warnings = report["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0]["kind"], "no_adapter");
+        assert_eq!(warnings[0]["device"], "lock");
+        assert_eq!(warnings[0]["protocol"], "switchbot");
     }
 
     #[test]

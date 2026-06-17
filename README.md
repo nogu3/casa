@@ -27,6 +27,32 @@ casa describe living_aircon
 
 # 一覧に各デバイスのプロパティマップを含める（その場で取得。永続キャッシュなし）
 casa list --describe
+
+# 設定ファイルの妥当性チェック（実機は呼ばない）。アダプタ未実装プロトコルを警告する
+casa validate
+```
+
+`get` / `set` の 2 つ目の引数 `<property>` の解釈はプロトコル依存:
+ECHONET Lite なら EPC（例 `0x80`）、Matter なら `endpoint/cluster/attribute`
+（例 `1/onoff/on-off`）。
+
+`casa validate` は設定を読んで妥当性を JSON で報告する（version・必須フィールド・
+未知プロトコルは読み込み時点で検証済み）。加えて、設定としては妥当だが実行時に
+`protocol_unsupported`（exit 14）になるアダプタ未実装プロトコルを `warnings` に出す:
+
+```json
+{
+  "timestamp": "2026-06-02T12:34:56+09:00",
+  "config": "/home/you/.config/casa/devices.toml",
+  "version": 1,
+  "device_count": 2,
+  "protocols": { "echonet": 1, "switchbot": 1 },
+  "warnings": [
+    { "kind": "no_adapter", "device": "entry_lock", "protocol": "switchbot",
+      "detail": "protocol \"switchbot\" has no adapter yet; get/set/on/off will fail at runtime" }
+  ],
+  "valid": true
+}
 ```
 
 stdout には純粋な構造化 JSON のみを出す。`timestamp`（ISO 8601）を必ず含む。
@@ -101,9 +127,9 @@ enl describe --ip <ip> --eoj <eoj>
 casa が呼ぶ mat のインターフェース（Matter は (node_id, endpoint, cluster, attribute) でアドレスする）:
 
 ```
-# casa get <name> <selector>  selector = endpoint/cluster/attribute（chip-tool 表記）
+# casa get <name> <property>  property = endpoint/cluster/attribute（chip-tool 表記）
 mat read <node_id> <endpoint> <cluster> <attribute>
-# casa set <name> <selector> <value>
+# casa set <name> <property> <value>
 mat write <node_id> <endpoint> <cluster> <attribute> <value>
 mat describe <node_id>
 ```
@@ -121,7 +147,7 @@ node_id = "5678"
 endpoint = 2              # on/off が対象とするエンドポイント
 ```
 
-`get` / `set` の `<selector>` は `endpoint/cluster/attribute` 形式（例: `casa get living_light 1/onoff/on-off`、`casa set living_light 1/levelcontrol/current-level 128`）。casa はこのセレクタを解釈せず `/` で分解して mat に渡すだけで、妥当性は mat（chip-tool）側が検証する。
+`get` / `set` の `<property>` は `endpoint/cluster/attribute` 形式（例: `casa get living_light 1/onoff/on-off`、`casa set living_light 1/levelcontrol/current-level 128`）。casa はこのセレクタを解釈せず `/` で分解して mat に渡すだけで、妥当性は mat（chip-tool）側が検証する。
 
 ### `on` / `off` の対応状況とマッピング先
 

@@ -3,6 +3,9 @@
 //! stdout は純粋な構造化 JSON のみ。`timestamp`（ISO 8601、casa が応答を
 //! 組み立てた時刻）を必ず含める。
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
 
@@ -45,6 +48,26 @@ pub fn describe_response(name: &str, device: &Device, properties: Value) -> Valu
         "device": name,
         "protocol": device.protocol(),
         "properties": properties,
+    })
+}
+
+/// `casa validate` の応答。load を通った時点で設定は妥当なので `valid` は常に true。
+/// `warnings` は妥当だが実行時に問題になりうる点（アダプタ未実装プロトコル等）。
+pub fn validate_response(
+    path: &Path,
+    version: u32,
+    device_count: usize,
+    protocols: BTreeMap<&str, u32>,
+    warnings: Vec<Value>,
+) -> Value {
+    json!({
+        "timestamp": timestamp(),
+        "config": path.display().to_string(),
+        "version": version,
+        "device_count": device_count,
+        "protocols": protocols,
+        "warnings": warnings,
+        "valid": true,
     })
 }
 
