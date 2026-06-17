@@ -86,5 +86,5 @@ fn example_config_in_repo_is_valid() {
     let out = run_casa(&["list", "--config", example], &[]);
     assert_eq!(out.status.code(), Some(0));
     let v = stdout_json(&out);
-    assert_eq!(v["devices"].as_array().unwrap().len(), 3);
+    assert_eq!(v["devices"].as_array().unwrap().len(), 5);
 }

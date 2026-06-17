@@ -29,8 +29,21 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum Device {
-    Echonet { ip: String, eoj: String },
-    Switchbot { device_id: String },
+    Echonet {
+        ip: String,
+        eoj: String,
+    },
+    Switchbot {
+        device_id: String,
+    },
+    Matter {
+        node_id: String,
+        /// OnOff ショートカット（`casa on`/`off`）が使うエンドポイント。
+        /// 未指定なら `mat` 側の既定（1）に委ねる。`get`/`set` は
+        /// `endpoint/cluster/attribute` セレクタ側で endpoint を持つのでここは使わない。
+        #[serde(default)]
+        endpoint: Option<u32>,
+    },
 }
 
 impl Device {
@@ -38,6 +51,7 @@ impl Device {
         match self {
             Device::Echonet { .. } => "echonet",
             Device::Switchbot { .. } => "switchbot",
+            Device::Matter { .. } => "matter",
         }
     }
 }
@@ -143,6 +157,50 @@ device_id = "DUMMY-XX-XX"
             Device::Switchbot { device_id } => assert_eq!(device_id, "DUMMY-XX-XX"),
             other => panic!("unexpected device: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_matter_device_with_optional_endpoint() {
+        let text = r#"
+version = 1
+
+[devices.living_light]
+protocol = "matter"
+node_id = "1234"
+
+[devices.strip_outlet2]
+protocol = "matter"
+node_id = "5678"
+endpoint = 2
+"#;
+        let config = parse(text).unwrap();
+        match config.device("living_light").unwrap() {
+            Device::Matter { node_id, endpoint } => {
+                assert_eq!(node_id, "1234");
+                assert_eq!(*endpoint, None);
+            }
+            other => panic!("unexpected device: {other:?}"),
+        }
+        match config.device("strip_outlet2").unwrap() {
+            Device::Matter { node_id, endpoint } => {
+                assert_eq!(node_id, "5678");
+                assert_eq!(*endpoint, Some(2));
+            }
+            other => panic!("unexpected device: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matter_missing_node_id_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.x]
+protocol = "matter"
+endpoint = 1
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("node_id"), "detail: {}", err.detail);
     }
 
     #[test]

@@ -16,3 +16,14 @@ eoj = "0x029101"
 [devices.entry_lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+
+# Matter デバイス。node_id は commission 済みノードの識別子（ここではダミー）。
+# endpoint は on/off ショートカット用の任意上書き（未指定なら mat の既定 1）。
+[devices.living_light]
+protocol = "matter"
+node_id = "1234"
+
+[devices.power_strip_outlet2]
+protocol = "matter"
+node_id = "5678"
+endpoint = 2

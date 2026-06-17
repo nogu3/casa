@@ -35,7 +35,7 @@ casa から呼ばれる前提のプロトコル固有 CLI は、以下の方針�
 |---|---|---|
 | ECHONET Lite | `enl` | 自作・開発中（独立リポジトリ） |
 | SwitchBot | `switchbot` | 公式 CLI を利用（`@switchbot/openapi-cli`、OpenAPI 経由）。将来自作に切り替える可能性あり。 |
-| Matter | 未定（`mat` 候補） | 未着手。`mtr` は既存 network diagnostic と衝突するため使わない |
+| Matter | `mat` | 自作 CLI（chip-tool ラッパ、独立リポジトリ）。casa アダプタ対応済み。`mtr` は既存 network diagnostic と衝突するため使わない |
 
 casa は **これらが `PATH` 上に存在すること**を前提とする。
 
@@ -334,7 +334,7 @@ Claude Code が casa を実装するときのリファレンス。フェーズ�
 
 - **SwitchBot**: 公式 `switchbot` CLI（`@switchbot/openapi-cli`）を呼ぶアダプタを書く。**自作 CLI は書かない**。認証は公式 CLI 側が完結させるので casa は credentials を扱わない（環境変数や設定ファイルから何かを渡す必要も基本的にない）。OpenAPI 経由＝クラウド往復のためレイテンシ特性が enl と異なる点だけ呼び出し側に伝える。
   - 将来、BLE 直接制御やローカル完結が必要になった場合は自作 CLI（`sbl` 等）に切り替える可能性がある。その場合も casa 側は `protocol = "switchbot"` のディスパッチ先バイナリを変えるだけで済むよう、アダプタは公式 CLI の存在を前提に閉じ込めること。
-- **Matter**: Matter CLI 出荷時に追加。同じくアダプタ 1 個。
+- **Matter**: **対応済み**。自作 `mat`（chip-tool ラッパ）を呼ぶアダプタを追加。Matter は (node_id, endpoint, cluster, attribute) でアドレスするため、casa の単一セレクタ `<epc>` を `endpoint/cluster/attribute` として解釈し `mat read`/`write` に割り当てる。`on`/`off` は OnOff コマンドの invoke（`mat on`/`off`）。設定は `node_id` 必須・`endpoint` 任意。Phase 3 のアダプタ trait に variant 1 個追加のみでサブコマンドハンドラは無変更。
 
 ---
 

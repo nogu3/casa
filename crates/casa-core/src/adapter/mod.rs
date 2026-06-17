@@ -6,6 +6,7 @@
 //! 3. アダプタのテストを追加する。
 
 pub mod echonet;
+pub mod matter;
 
 use crate::config::Device;
 
@@ -49,6 +50,7 @@ pub trait Adapter {
 pub fn adapter_for(device: &Device) -> Option<&'static dyn Adapter> {
     match device {
         Device::Echonet { .. } => Some(&echonet::EchonetAdapter),
+        Device::Matter { .. } => Some(&matter::MatterAdapter),
         // Phase 4: 公式 switchbot CLI（@switchbot/openapi-cli）を呼ぶアダプタを追加する。
         Device::Switchbot { .. } => None,
     }
@@ -66,6 +68,16 @@ mod tests {
         };
         let adapter = adapter_for(&device).unwrap();
         assert_eq!(adapter.get(&device, "0x80").unwrap().bin, "enl");
+    }
+
+    #[test]
+    fn matter_devices_dispatch_to_matter_adapter() {
+        let device = Device::Matter {
+            node_id: "1234".into(),
+            endpoint: None,
+        };
+        let adapter = adapter_for(&device).unwrap();
+        assert_eq!(adapter.get(&device, "1/onoff/on-off").unwrap().bin, "mat");
     }
 
     #[test]

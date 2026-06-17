@@ -32,7 +32,9 @@ pub fn write_config(dir: &Path, text: &str) -> PathBuf {
 pub fn run_casa(args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_casa"));
     // 親環境の CASA_* がテストに漏れないよう明示的に消す。
-    cmd.env_remove("CASA_CONFIG").env_remove("CASA_ENL_BIN");
+    cmd.env_remove("CASA_CONFIG")
+        .env_remove("CASA_ENL_BIN")
+        .env_remove("CASA_MAT_BIN");
     cmd.args(args);
     for (k, v) in envs {
         cmd.env(k, v);

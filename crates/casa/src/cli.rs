@@ -39,20 +39,20 @@ pub enum Command {
         /// 設定ファイル上のデバイス名
         name: String,
     },
-    /// デバイスのプロパティを読む（ECHONET Lite なら EPC 指定）
+    /// デバイスのプロパティを読む（ECHONET Lite: EPC 例 0x80 / Matter: endpoint/cluster/attribute 例 1/onoff/on-off）
     Get {
         /// 設定ファイル上のデバイス名
         name: String,
-        /// プロパティ識別子（例: 0x80）。子 CLI にそのまま渡す
+        /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/onoff/on-off`）
         epc: String,
     },
     /// デバイスのプロパティに書き込む
     Set {
         /// 設定ファイル上のデバイス名
         name: String,
-        /// プロパティ識別子（例: 0x80）。子 CLI にそのまま渡す
+        /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/levelcontrol/current-level`）
         epc: String,
-        /// 書き込む値（例: 0x30）。子 CLI にそのまま渡す
+        /// 書き込む値。子 CLI にそのまま渡す
         value: String,
     },
 }

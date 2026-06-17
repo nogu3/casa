@@ -87,8 +87,8 @@ casa はプロトコル固有 CLI が `PATH` 上に存在することを前提�
 | プロトコル | CLI | 想定最低バージョン | 状態 |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 0.1.0（`get` / `set` が stdout に JSON を出すこと） | 対応済み |
+| Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `describe` が stdout に JSON を出すこと | 対応済み |
 | SwitchBot | `switchbot` | — | 未対応（Phase 4） |
-| Matter | 未定 | — | 未対応 |
 
 casa が呼ぶ enl のインターフェース（enl の出荷に合わせて追従する）:
 
@@ -98,6 +98,31 @@ enl set --ip <ip> --eoj <eoj> --epc <epc> --value <value>
 enl describe --ip <ip> --eoj <eoj>
 ```
 
+casa が呼ぶ mat のインターフェース（Matter は (node_id, endpoint, cluster, attribute) でアドレスする）:
+
+```
+# casa get <name> <selector>  selector = endpoint/cluster/attribute（chip-tool 表記）
+mat read <node_id> <endpoint> <cluster> <attribute>
+# casa set <name> <selector> <value>
+mat write <node_id> <endpoint> <cluster> <attribute> <value>
+mat describe <node_id>
+```
+
+Matter デバイスは設定で `node_id` を必須、`endpoint`（on/off ショートカット用、既定は mat 側の 1）を任意で持つ:
+
+```toml
+[devices.living_light]
+protocol = "matter"
+node_id = "1234"          # commission 済みノードの識別子
+
+[devices.power_strip_outlet2]
+protocol = "matter"
+node_id = "5678"
+endpoint = 2              # on/off が対象とするエンドポイント
+```
+
+`get` / `set` の `<selector>` は `endpoint/cluster/attribute` 形式（例: `casa get living_light 1/onoff/on-off`、`casa set living_light 1/levelcontrol/current-level 128`）。casa はこのセレクタを解釈せず `/` で分解して mat に渡すだけで、妥当性は mat（chip-tool）側が検証する。
+
 ### `on` / `off` の対応状況とマッピング先
 
 ショートカットのマッピングはプロトコルロジックではなく UX として casa 内に
@@ -106,9 +131,11 @@ enl describe --ip <ip> --eoj <eoj>
 | プロトコル | `on` | `off` | マッピング先 |
 |---|---|---|---|
 | ECHONET Lite | ○ | ○ | EPC `0x80` に `0x30`（ON）/ `0x31`（OFF）を set |
+| Matter | ○ | ○ | OnOff クラスタの On / Off コマンドを invoke（`mat on`/`off`、エンドポイントは設定の `endpoint`） |
 | SwitchBot | × | × | 未対応（Phase 4 でアダプタ追加時に対応） |
 
-`describe` も同様: ECHONET Lite は `enl describe`（プロパティマップ）、SwitchBot は未対応
+`describe` も同様: ECHONET Lite は `enl describe`（プロパティマップ）、Matter は `mat describe`
+（ノードの endpoint / cluster introspection）、SwitchBot は未対応
 （`casa describe` は exit 14、`casa list --describe` では `properties: null`）。
 
 バイナリの解決は `PATH` が既定。以下で上書きできる（環境変数が優先）:
