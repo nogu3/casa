@@ -37,17 +37,17 @@ fn selector_parts(selector: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 impl Adapter for MatterAdapter {
-    fn get(&self, device: &Device, epc: &str) -> Option<Invocation> {
+    fn get(&self, device: &Device, property: &str) -> Option<Invocation> {
         let (node, _) = address(device)?;
         let mut args = vec!["read".to_string(), node.to_string()];
-        args.extend(selector_parts(epc));
+        args.extend(selector_parts(property));
         Some(invocation(args))
     }
 
-    fn set(&self, device: &Device, epc: &str, value: &str) -> Option<Invocation> {
+    fn set(&self, device: &Device, property: &str, value: &str) -> Option<Invocation> {
         let (node, _) = address(device)?;
         let mut args = vec!["write".to_string(), node.to_string()];
-        args.extend(selector_parts(epc));
+        args.extend(selector_parts(property));
         args.push(value.to_string());
         Some(invocation(args))
     }

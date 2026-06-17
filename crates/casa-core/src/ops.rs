@@ -10,18 +10,24 @@ use crate::config::{Config, Device};
 use crate::error::{CasaError, ErrorKind};
 use crate::{output, runner};
 
-/// `casa get <name> <epc>`
-pub fn get(config: &Config, name: &str, epc: &str) -> Result<Value, CasaError> {
+/// `casa get <name> <property>`
+pub fn get(config: &Config, name: &str, property: &str) -> Result<Value, CasaError> {
     let device = config.device(name)?;
     let adapter = require_adapter(device, "get")?;
-    run_for_value(adapter.get(device, epc), config, name, device, "get")
+    run_for_value(adapter.get(device, property), config, name, device, "get")
 }
 
-/// `casa set <name> <epc> <value>`
-pub fn set(config: &Config, name: &str, epc: &str, value: &str) -> Result<Value, CasaError> {
+/// `casa set <name> <property> <value>`
+pub fn set(config: &Config, name: &str, property: &str, value: &str) -> Result<Value, CasaError> {
     let device = config.device(name)?;
     let adapter = require_adapter(device, "set")?;
-    run_for_value(adapter.set(device, epc, value), config, name, device, "set")
+    run_for_value(
+        adapter.set(device, property, value),
+        config,
+        name,
+        device,
+        "set",
+    )
 }
 
 /// `casa on <name>` / `casa off <name>`
@@ -97,7 +103,7 @@ mod tests {
     struct VirtualAdapter;
 
     impl Adapter for VirtualAdapter {
-        fn get(&self, _device: &Device, _epc: &str) -> Option<Invocation> {
+        fn get(&self, _device: &Device, _property: &str) -> Option<Invocation> {
             // `echo` は引数をそのまま stdout に出すので、子 CLI の代役になる。
             Some(Invocation {
                 bin: "echo",

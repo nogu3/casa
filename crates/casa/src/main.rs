@@ -40,8 +40,12 @@ fn run(cli: Cli) -> Result<(), CasaError> {
             }
             output::list_response(devices)
         }
-        Command::Get { name, epc } => ops::get(&config, &name, &epc)?,
-        Command::Set { name, epc, value } => ops::set(&config, &name, &epc, &value)?,
+        Command::Get { name, property } => ops::get(&config, &name, &property)?,
+        Command::Set {
+            name,
+            property,
+            value,
+        } => ops::set(&config, &name, &property, &value)?,
         Command::Describe { name } => ops::describe(&config, &name)?,
         Command::On { name } => ops::power(&config, &name, true)?,
         Command::Off { name } => ops::power(&config, &name, false)?,

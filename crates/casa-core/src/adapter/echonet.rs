@@ -30,15 +30,17 @@ fn invocation(parts: &[&str]) -> Invocation {
 }
 
 impl Adapter for EchonetAdapter {
-    fn get(&self, device: &Device, epc: &str) -> Option<Invocation> {
-        let (ip, eoj) = address(device)?;
-        Some(invocation(&["get", "--ip", ip, "--eoj", eoj, "--epc", epc]))
-    }
-
-    fn set(&self, device: &Device, epc: &str, value: &str) -> Option<Invocation> {
+    fn get(&self, device: &Device, property: &str) -> Option<Invocation> {
         let (ip, eoj) = address(device)?;
         Some(invocation(&[
-            "set", "--ip", ip, "--eoj", eoj, "--epc", epc, "--value", value,
+            "get", "--ip", ip, "--eoj", eoj, "--epc", property,
+        ]))
+    }
+
+    fn set(&self, device: &Device, property: &str, value: &str) -> Option<Invocation> {
+        let (ip, eoj) = address(device)?;
+        Some(invocation(&[
+            "set", "--ip", ip, "--eoj", eoj, "--epc", property, "--value", value,
         ]))
     }
 

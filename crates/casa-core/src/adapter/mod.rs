@@ -24,13 +24,13 @@ pub struct Invocation {
 /// （exit 14）に変換する。既定はすべて未対応なので、アダプタは対応する操作だけ
 /// 実装すればよい。
 pub trait Adapter {
-    fn get(&self, device: &Device, epc: &str) -> Option<Invocation> {
-        let _ = (device, epc);
+    fn get(&self, device: &Device, property: &str) -> Option<Invocation> {
+        let _ = (device, property);
         None
     }
 
-    fn set(&self, device: &Device, epc: &str, value: &str) -> Option<Invocation> {
-        let _ = (device, epc, value);
+    fn set(&self, device: &Device, property: &str, value: &str) -> Option<Invocation> {
+        let _ = (device, property, value);
         None
     }
 

@@ -44,14 +44,14 @@ pub enum Command {
         /// 設定ファイル上のデバイス名
         name: String,
         /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/onoff/on-off`）
-        epc: String,
+        property: String,
     },
     /// デバイスのプロパティに書き込む
     Set {
         /// 設定ファイル上のデバイス名
         name: String,
         /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/levelcontrol/current-level`）
-        epc: String,
+        property: String,
         /// 書き込む値。子 CLI にそのまま渡す
         value: String,
     },
