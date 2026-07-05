@@ -59,7 +59,17 @@ fn get_splits_selector_into_mat_read_args() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!(["read", "1234", "1", "onoff", "on-off"]);
+    let expected = serde_json::json!([
+        "read",
+        "--node",
+        "1234",
+        "--endpoint",
+        "1",
+        "--cluster",
+        "onoff",
+        "--attribute",
+        "on-off"
+    ]);
     assert_eq!(v["value"]["args"], expected);
 }
 
@@ -80,8 +90,19 @@ fn set_builds_mat_write_args() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected =
-        serde_json::json!(["write", "1234", "1", "levelcontrol", "current-level", "128"]);
+    let expected = serde_json::json!([
+        "write",
+        "--node",
+        "1234",
+        "--endpoint",
+        "1",
+        "--cluster",
+        "levelcontrol",
+        "--attribute",
+        "current-level",
+        "--value",
+        "128"
+    ]);
     assert_eq!(v["value"]["args"], expected);
 }
 
@@ -95,7 +116,7 @@ fn describe_builds_mat_describe_args() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!(["describe", "1234"]);
+    let expected = serde_json::json!(["describe", "--node", "1234"]);
     assert_eq!(v["properties"]["args"], expected);
 }
 
@@ -109,7 +130,7 @@ fn on_without_endpoint_omits_flag() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!(["on", "1234"]);
+    let expected = serde_json::json!(["on", "--node", "1234"]);
     assert_eq!(v["value"]["args"], expected);
 }
 
@@ -123,6 +144,6 @@ fn off_with_endpoint_passes_flag() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!(["off", "5678", "--endpoint", "2"]);
+    let expected = serde_json::json!(["off", "--node", "5678", "--endpoint", "2"]);
     assert_eq!(v["value"]["args"], expected);
 }
