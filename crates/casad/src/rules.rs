@@ -102,14 +102,19 @@ pub fn load(path: &Path) -> Result<RuleFile, CasaError> {
 }
 
 impl RuleFile {
-    /// 参照するデバイス名がすべて config に存在するか検証する（発火前に弾く）。
+    /// 参照する名前がすべて config に存在するか検証する（発火前に弾く）。
     /// 未定義名は `name_not_found`（exit 11）。エラーにはルール名を添える。
+    ///
+    /// `when.device`（イベントトリガの発火元）は `enl listen` の通知と ip/eoj で
+    /// 突き合わせる実デバイスが必要なため、グループは許可しない（`check_device`）。
+    /// `then.device`（アクション対象）は casa の `on`/`off` に渡るだけなので、
+    /// グループ名も許可する（`check_target`。名前解決は casa 側が担う）。
     pub fn validate(&self, config: &Config) -> Result<(), CasaError> {
         for rule in &self.rules {
             if let Trigger::Event { device, .. } = &rule.when {
                 check_device(config, &rule.name, device)?;
             }
-            check_device(config, &rule.name, &rule.then.device)?;
+            check_target(config, &rule.name, &rule.then.device)?;
         }
         Ok(())
     }
@@ -119,6 +124,12 @@ fn check_device(config: &Config, rule_name: &str, device: &str) -> Result<(), Ca
     config
         .device(device)
         .map(|_| ())
+        .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))
+}
+
+fn check_target(config: &Config, rule_name: &str, name: &str) -> Result<(), CasaError> {
+    config
+        .ensure_target(name)
         .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))
 }
 
@@ -198,6 +209,41 @@ then = { action = "on", device = "hallway_light" }
     fn validate_accepts_existing_devices() {
         let file = parse(VALID).unwrap();
         file.validate(&config_with_devices()).unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_group_as_then_device() {
+        let config = casa_core::config::parse(
+            r#"
+version = 1
+[devices.entry_motion]
+protocol = "echonet"
+ip = "192.0.2.10"
+eoj = "0x000701"
+[devices.hallway_light]
+protocol = "echonet"
+ip = "192.0.2.11"
+eoj = "0x029001"
+[devices.hallway_light2]
+protocol = "echonet"
+ip = "192.0.2.12"
+eoj = "0x029001"
+[groups.hallway]
+members = ["hallway_light", "hallway_light2"]
+"#,
+        )
+        .unwrap();
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "帰宅で廊下灯グループ点灯"
+when = { device = "entry_motion", epc = "0x80", equals = "0x30" }
+then = { action = "on", device = "hallway" }
+"#,
+        )
+        .unwrap();
+        file.validate(&config).unwrap();
     }
 
     #[test]

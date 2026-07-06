@@ -76,6 +76,21 @@ impl Config {
             )
         })
     }
+
+    /// 名前が device / group のどちらかとして存在するかだけを検証する。
+    /// グループはメンバー解決を伴う実行を casa 側（`Config::device` を使わない経路）に
+    /// 委ねるため `&Device` を返せない。呼び出し前検証（casad の spawn 前チェックなど）で
+    /// 「casa に投げてよい名前か」だけを確認したい場合に使う。
+    pub fn ensure_target(&self, name: &str) -> Result<(), CasaError> {
+        if self.devices.contains_key(name) || self.groups.contains_key(name) {
+            Ok(())
+        } else {
+            Err(CasaError::new(
+                ErrorKind::NameNotFound,
+                format!("\"{name}\" is not defined as a device or group in the config file"),
+            ))
+        }
+    }
 }
 
 /// 既定の設定ファイルパス。
@@ -305,6 +320,25 @@ ip = "192.0.2.10"
     fn unknown_name_is_name_not_found() {
         let config = parse(VALID).unwrap();
         let err = config.device("no_such_device").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NameNotFound);
+    }
+
+    #[test]
+    fn ensure_target_accepts_device_name() {
+        let config = parse(VALID).unwrap();
+        config.ensure_target("living_aircon").unwrap();
+    }
+
+    #[test]
+    fn ensure_target_accepts_group_name() {
+        let config = parse(VALID_WITH_GROUPS).unwrap();
+        config.ensure_target("living").unwrap();
+    }
+
+    #[test]
+    fn ensure_target_unknown_name_is_name_not_found() {
+        let config = parse(VALID_WITH_GROUPS).unwrap();
+        let err = config.ensure_target("no_such_target").unwrap_err();
         assert_eq!(err.kind, ErrorKind::NameNotFound);
     }
 
