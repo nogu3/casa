@@ -18,10 +18,20 @@ pub struct Config {
     pub version: u32,
     #[serde(default)]
     pub devices: BTreeMap<String, Device>,
+    /// デバイスをまとめて操作するグループ。書き系（on/off/color-temp/set）のみ対応。
+    /// メンバー整合性はロード時に検証済みなので、実行時の名前解決は失敗しない。
+    #[serde(default)]
+    pub groups: BTreeMap<String, Group>,
     /// 子 CLI バイナリのフルパス上書き（例: `enl = "/opt/bin/enl"`）。
     /// 環境変数 `CASA_<BIN>_BIN` の方が優先される。
     #[serde(default)]
     pub binaries: BTreeMap<String, String>,
+}
+
+/// デバイスグループ。ネスト（メンバーにグループ名）は不可。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Group {
+    pub members: Vec<String>,
 }
 
 /// デバイス定義。`protocol` フィールドが dispatch の唯一の真実。
@@ -121,6 +131,33 @@ pub fn parse(text: &str) -> Result<Config, CasaError> {
         ));
     }
 
+    // グループのバリデーション
+    for (name, group) in &config.groups {
+        if config.devices.contains_key(name) {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!("group \"{name}\" collides with a device of the same name"),
+            ));
+        }
+        if group.members.is_empty() {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!("group \"{name}\" has no members"),
+            ));
+        }
+        for member in &group.members {
+            if config.devices.contains_key(member) {
+                continue;
+            }
+            let detail = if config.groups.contains_key(member) {
+                format!("group \"{name}\" member \"{member}\" is a group; groups cannot be nested")
+            } else {
+                format!("group \"{name}\" member \"{member}\" is not defined in [devices]")
+            };
+            return Err(CasaError::new(ErrorKind::ConfigParse, detail));
+        }
+    }
+
     Ok(config)
 }
 
@@ -139,6 +176,22 @@ eoj = "0x013001"
 [devices.entry_lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+"#;
+
+    const VALID_WITH_GROUPS: &str = r#"
+version = 1
+
+[devices.living_light]
+protocol = "matter"
+node_id = "1234"
+
+[devices.living_aircon]
+protocol = "echonet"
+ip = "192.0.2.10"
+eoj = "0x013001"
+
+[groups.living]
+members = ["living_light", "living_aircon"]
 "#;
 
     #[test]
@@ -253,5 +306,77 @@ ip = "192.0.2.10"
         let config = parse(VALID).unwrap();
         let err = config.device("no_such_device").unwrap_err();
         assert_eq!(err.kind, ErrorKind::NameNotFound);
+    }
+
+    #[test]
+    fn parses_groups() {
+        let config = parse(VALID_WITH_GROUPS).unwrap();
+        let group = config.groups.get("living").unwrap();
+        assert_eq!(group.members, vec!["living_light", "living_aircon"]);
+    }
+
+    #[test]
+    fn config_without_groups_stays_compatible() {
+        let config = parse(VALID).unwrap();
+        assert!(config.groups.is_empty());
+    }
+
+    #[test]
+    fn group_member_not_in_devices_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.a]
+protocol = "matter"
+node_id = "1"
+[groups.g]
+members = ["a", "ghost"]
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("ghost"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn group_name_colliding_with_device_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.living]
+protocol = "matter"
+node_id = "1"
+[groups.living]
+members = ["living"]
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("living"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn empty_group_is_config_parse() {
+        let text = r#"
+version = 1
+[groups.g]
+members = []
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("no members"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn nested_group_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.a]
+protocol = "matter"
+node_id = "1"
+[groups.inner]
+members = ["a"]
+[groups.outer]
+members = ["inner"]
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("nested"), "detail: {}", err.detail);
     }
 }
