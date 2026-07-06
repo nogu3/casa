@@ -22,6 +22,10 @@ casa set living_aircon 0x80 0x30
 casa on living_aircon
 casa off living_aircon
 
+# グループ操作（[groups] で定義。メンバー全員へ並列に同時実行）
+casa on living
+casa off living
+
 # 色温度変更のショートカット（Matter のみ。--kelvin / --mireds は排他）
 casa color-temp living_light --kelvin 2700
 casa color-temp living_light --mireds 370 --transition 30
@@ -58,6 +62,27 @@ ECHONET Lite なら EPC（例 `0x80`）、Matter なら `endpoint/cluster/attrib
   "valid": true
 }
 ```
+
+### グループ
+
+`devices.toml` の `[groups]` で複数デバイスをひとつの名前にまとめられる。
+`on` / `off` / `color-temp` / `set` はグループ名を透過的に受け付け、全メンバーの
+子 CLI を並列に spawn して同時実行する（プロトコル混在可）。`get` / `describe` は
+グループ非対応（exit 14）。結果はメンバー別の JSON:
+
+```json
+{
+  "timestamp": "2026-07-06T12:34:56+09:00",
+  "group": "living",
+  "results": [
+    {"device": "living_light", "protocol": "matter", "ok": true, "value": {}},
+    {"device": "living_aircon", "protocol": "echonet", "ok": false,
+     "error": {"kind": "child_failed", "exit_code": 3, "detail": "..."}}
+  ]
+}
+```
+
+全員成功なら exit 0、1 件でも失敗したら exit 15（`group_partial_failure`）。
 
 stdout には純粋な構造化 JSON のみを出す。`timestamp`（ISO 8601）を必ず含む。
 
@@ -108,6 +133,10 @@ eoj = "0x013001"
 [devices.entry_lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+
+# 複数デバイスをまとめて操作するグループ（on / off / color-temp / set のみ対応）
+[groups.living]
+members = ["living_light", "living_aircon"]
 ```
 
 ## 子 CLI（兄弟 CLI）
@@ -199,10 +228,14 @@ ECHONET Lite / SwitchBot は未対応（exit 14 `protocol_unsupported`）。
 | 12 | 子 CLI バイナリが見つからない / 実行不可 |
 | 13 | 子 CLI の stdout が JSON としてパースできない |
 | 14 | そのプロトコルでは未対応の操作 |
+| 15 | グループ実行でメンバーの一部（または全部）が失敗 |
 | その他 | 子 CLI の exit code をそのまま伝播 |
 
 子 CLI 由来のエラーは元の exit code を保つ（例: enl がタイムアウトの `3` で終了したら
 casa も `3` で終了する）ので、呼び出し側が「タイムアウトかリジェクトか」等を区別できる。
+
+グループ実行の部分失敗（exit 15）でも stdout にはメンバー別結果の JSON が出る。
+どのメンバーが何の exit code で失敗したかは `results[].error.exit_code` で判別できる。
 
 ## stderr エラー形式
 

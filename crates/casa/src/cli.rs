@@ -31,12 +31,12 @@ pub enum Command {
     },
     /// デバイスの電源を入れる（ECHONET Lite: EPC 0x80 = 0x30）
     On {
-        /// 設定ファイル上のデバイス名
+        /// 設定ファイル上のデバイス名またはグループ名
         name: String,
     },
     /// デバイスの電源を切る（ECHONET Lite: EPC 0x80 = 0x31）
     Off {
-        /// 設定ファイル上のデバイス名
+        /// 設定ファイル上のデバイス名またはグループ名
         name: String,
     },
     /// デバイスのプロパティを読む（ECHONET Lite: EPC 例 0x80 / Matter: endpoint/cluster/attribute 例 1/onoff/on-off）
@@ -49,7 +49,7 @@ pub enum Command {
     /// デバイスの色温度を変える（Matter: ColorControl コマンド invoke を mat color-temp に委譲）
     #[command(group(ArgGroup::new("temp").required(true).args(["kelvin", "mireds"])))]
     ColorTemp {
-        /// 設定ファイル上のデバイス名
+        /// 設定ファイル上のデバイス名またはグループ名
         name: String,
         /// 色温度（ケルビン、例 2700）。--mireds と排他
         #[arg(long, value_name = "K")]
@@ -68,7 +68,7 @@ pub enum Command {
     Validate,
     /// デバイスのプロパティに書き込む
     Set {
-        /// 設定ファイル上のデバイス名
+        /// 設定ファイル上のデバイス名またはグループ名
         name: String,
         /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/levelcontrol/current-level`）
         property: String,
