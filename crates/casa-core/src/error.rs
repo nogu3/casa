@@ -22,6 +22,9 @@ pub enum ErrorKind {
     ChildInvalidOutput,
     /// その操作に対応するアダプタが未実装のプロトコル。
     ProtocolUnsupported,
+    /// グループ実行でメンバーの一部（または全部）が失敗した。
+    /// メンバー別の成否は stdout のグループ結果 JSON（`CasaError::response`）で判別する。
+    GroupPartialFailure,
 }
 
 impl ErrorKind {
@@ -34,6 +37,7 @@ impl ErrorKind {
             ErrorKind::ChildFailed(_) => "child_failed",
             ErrorKind::ChildInvalidOutput => "child_invalid_output",
             ErrorKind::ProtocolUnsupported => "protocol_unsupported",
+            ErrorKind::GroupPartialFailure => "group_partial_failure",
         }
     }
 
@@ -45,6 +49,7 @@ impl ErrorKind {
             ErrorKind::ChildFailed(code) => *code,
             ErrorKind::ChildInvalidOutput => 13,
             ErrorKind::ProtocolUnsupported => 14,
+            ErrorKind::GroupPartialFailure => 15,
         }
     }
 }
@@ -53,6 +58,9 @@ impl ErrorKind {
 pub struct CasaError {
     pub kind: ErrorKind,
     pub detail: String,
+    /// エラーでも stdout に出すべき応答（グループ部分失敗のメンバー別結果）。
+    /// main が emit してから exit する。
+    pub response: Option<serde_json::Value>,
 }
 
 impl CasaError {
@@ -60,7 +68,13 @@ impl CasaError {
         Self {
             kind,
             detail: detail.into(),
+            response: None,
         }
+    }
+
+    pub fn with_response(mut self, response: serde_json::Value) -> Self {
+        self.response = Some(response);
+        self
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -101,6 +115,7 @@ mod tests {
         assert_eq!(ErrorKind::ChildFailed(4).exit_code(), 4);
         assert_eq!(ErrorKind::ChildInvalidOutput.exit_code(), 13);
         assert_eq!(ErrorKind::ProtocolUnsupported.exit_code(), 14);
+        assert_eq!(ErrorKind::GroupPartialFailure.exit_code(), 15);
     }
 
     #[test]
@@ -109,5 +124,19 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&err.to_stderr_json()).unwrap();
         assert_eq!(v["error"]["kind"], "config_missing");
         assert_eq!(v["error"]["detail"], "no such file");
+    }
+
+    #[test]
+    fn group_partial_failure_is_exit_15() {
+        assert_eq!(ErrorKind::GroupPartialFailure.exit_code(), 15);
+        assert_eq!(ErrorKind::GroupPartialFailure.as_str(), "group_partial_failure");
+    }
+
+    #[test]
+    fn with_response_attaches_stdout_body() {
+        let err = CasaError::new(ErrorKind::GroupPartialFailure, "1/2 failed");
+        assert!(err.response.is_none());
+        let err = err.with_response(serde_json::json!({"group": "living"}));
+        assert_eq!(err.response.unwrap()["group"], "living");
     }
 }
