@@ -15,7 +15,7 @@
 //! 高頻度ショートカット（`mat on`/`off`）に委ねる。エンドポイントは設定の
 //! `endpoint`（未指定なら `mat` の既定 1）。
 
-use super::{Adapter, Invocation};
+use super::{Adapter, ColorTemp, Invocation};
 use crate::config::Device;
 
 const BIN: &str = "mat";
@@ -93,6 +93,35 @@ impl Adapter for MatterAdapter {
         }
         Some(invocation(args))
     }
+
+    /// 色温度変更は属性 write ではなく ColorControl コマンドの invoke なので、
+    /// `mat` の高頻度ショートカット（`mat color-temp`）に委ねる。値は検証せず
+    /// そのまま渡す（範囲外は mat / デバイス側が clamp）。
+    fn color_temp(&self, device: &Device, color: &ColorTemp) -> Option<Invocation> {
+        let (node, endpoint) = address(device)?;
+        let mut args = vec![
+            "color-temp".to_string(),
+            "--node".to_string(),
+            node.to_string(),
+        ];
+        if let Some(ep) = endpoint {
+            args.push("--endpoint".to_string());
+            args.push(ep.to_string());
+        }
+        if let Some(kelvin) = &color.kelvin {
+            args.push("--kelvin".to_string());
+            args.push(kelvin.clone());
+        }
+        if let Some(mireds) = &color.mireds {
+            args.push("--mireds".to_string());
+            args.push(mireds.clone());
+        }
+        if let Some(transition) = &color.transition {
+            args.push("--transition".to_string());
+            args.push(transition.clone());
+        }
+        Some(invocation(args))
+    }
 }
 
 #[cfg(test)]
@@ -142,14 +171,24 @@ mod tests {
         let inv = MatterAdapter.get(&device(), "onoff/on-off").unwrap();
         assert_eq!(
             args(&inv),
-            ["read", "--node", "1234", "--cluster", "onoff", "--attribute", "on-off"]
+            [
+                "read",
+                "--node",
+                "1234",
+                "--cluster",
+                "onoff",
+                "--attribute",
+                "on-off"
+            ]
         );
     }
 
     #[test]
     fn get_rejects_malformed_selector() {
         assert!(MatterAdapter.get(&device(), "on-off").is_none());
-        assert!(MatterAdapter.get(&device(), "1/onoff/on-off/extra").is_none());
+        assert!(MatterAdapter
+            .get(&device(), "1/onoff/on-off/extra")
+            .is_none());
     }
 
     #[test]
@@ -191,5 +230,66 @@ mod tests {
     fn power_off_with_endpoint_passes_flag() {
         let inv = MatterAdapter.power(&device_on_endpoint(2), false).unwrap();
         assert_eq!(args(&inv), ["off", "--node", "1234", "--endpoint", "2"]);
+    }
+
+    #[test]
+    fn color_temp_kelvin_maps_to_mat_color_temp() {
+        let req = ColorTemp {
+            kelvin: Some("2700".into()),
+            mireds: None,
+            transition: None,
+        };
+        let inv = MatterAdapter.color_temp(&device(), &req).unwrap();
+        assert_eq!(inv.bin, "mat");
+        assert_eq!(
+            args(&inv),
+            ["color-temp", "--node", "1234", "--kelvin", "2700"]
+        );
+    }
+
+    #[test]
+    fn color_temp_mireds_with_endpoint_passes_flags() {
+        let req = ColorTemp {
+            kelvin: None,
+            mireds: Some("370".into()),
+            transition: None,
+        };
+        let inv = MatterAdapter
+            .color_temp(&device_on_endpoint(2), &req)
+            .unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "color-temp",
+                "--node",
+                "1234",
+                "--endpoint",
+                "2",
+                "--mireds",
+                "370"
+            ]
+        );
+    }
+
+    #[test]
+    fn color_temp_transition_is_appended() {
+        let req = ColorTemp {
+            kelvin: Some("2700".into()),
+            mireds: None,
+            transition: Some("30".into()),
+        };
+        let inv = MatterAdapter.color_temp(&device(), &req).unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "color-temp",
+                "--node",
+                "1234",
+                "--kelvin",
+                "2700",
+                "--transition",
+                "30"
+            ]
+        );
     }
 }

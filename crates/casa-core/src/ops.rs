@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::adapter::{self, Adapter, Invocation};
+use crate::adapter::{self, Adapter, ColorTemp, Invocation};
 use crate::config::{Config, Device};
 use crate::error::{CasaError, ErrorKind};
 use crate::{output, runner};
@@ -54,7 +54,13 @@ pub fn validate(config: &Config, path: &Path) -> Value {
             }));
         }
     }
-    output::validate_response(path, config.version, config.devices.len(), protocols, warnings)
+    output::validate_response(
+        path,
+        config.version,
+        config.devices.len(),
+        protocols,
+        warnings,
+    )
 }
 
 /// `casa on <name>` / `casa off <name>`
@@ -63,6 +69,19 @@ pub fn power(config: &Config, name: &str, on: bool) -> Result<Value, CasaError> 
     let device = config.device(name)?;
     let adapter = require_adapter(device, op)?;
     run_for_value(adapter.power(device, on), config, name, device, op)
+}
+
+/// `casa color-temp <name> --kelvin <k> | --mireds <m> [--transition <s>]`
+pub fn color_temp(config: &Config, name: &str, color: &ColorTemp) -> Result<Value, CasaError> {
+    let device = config.device(name)?;
+    let adapter = require_adapter(device, "color-temp")?;
+    run_for_value(
+        adapter.color_temp(device, color),
+        config,
+        name,
+        device,
+        "color-temp",
+    )
 }
 
 /// `casa describe <name>`

@@ -22,6 +22,10 @@ casa set living_aircon 0x80 0x30
 casa on living_aircon
 casa off living_aircon
 
+# 色温度変更のショートカット（Matter のみ。--kelvin / --mireds は排他）
+casa color-temp living_light --kelvin 2700
+casa color-temp living_light --mireds 370 --transition 30
+
 # プロパティマップ（introspection）
 casa describe living_aircon
 
@@ -113,7 +117,7 @@ casa はプロトコル固有 CLI が `PATH` 上に存在することを前提�
 | プロトコル | CLI | 想定最低バージョン | 状態 |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 0.1.0（`get` / `set` が stdout に JSON を出すこと） | 対応済み |
-| Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `describe` が stdout に JSON を出すこと | 対応済み |
+| Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe` が stdout に JSON を出すこと | 対応済み |
 | SwitchBot | `switchbot` | — | 未対応（Phase 4） |
 
 casa が呼ぶ enl のインターフェース（enl の出荷に合わせて追従する）:
@@ -132,6 +136,8 @@ mat read <node_id> <endpoint> <cluster> <attribute>
 # casa set <name> <property> <value>
 mat write <node_id> <endpoint> <cluster> <attribute> <value>
 mat describe <node_id>
+# casa color-temp <name> --kelvin <k> | --mireds <m> [--transition <t>]
+mat color-temp --node <node_id> [--endpoint <ep>] --kelvin <k> | --mireds <m> [--transition <t>]
 ```
 
 Matter デバイスは設定で `node_id` を必須、`endpoint`（on/off ショートカット用、既定は mat 側の 1）を任意で持つ:
@@ -163,6 +169,12 @@ endpoint = 2              # on/off が対象とするエンドポイント
 `describe` も同様: ECHONET Lite は `enl describe`（プロパティマップ）、Matter は `mat describe`
 （ノードの endpoint / cluster introspection）、SwitchBot は未対応
 （`casa describe` は exit 14、`casa list --describe` では `properties: null`）。
+
+`color-temp` は Matter のみ対応: 色温度変更は属性 write ではなく ColorControl コマンドの
+invoke なので、`mat color-temp` に委譲する（エンドポイントは設定の `endpoint`）。
+`--kelvin` / `--mireds` はどちらか一方が必須（排他は clap が検証、exit 2）。
+範囲外の値は mat / デバイス側が clamp し、casa は事前検証しない。
+ECHONET Lite / SwitchBot は未対応（exit 14 `protocol_unsupported`）。
 
 バイナリの解決は `PATH` が既定。以下で上書きできる（環境変数が優先）:
 

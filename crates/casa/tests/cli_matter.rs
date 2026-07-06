@@ -135,6 +135,121 @@ fn on_without_endpoint_omits_flag() {
 }
 
 #[test]
+fn color_temp_kelvin_builds_mat_color_temp_args() {
+    let (config, _dir) = setup();
+    let out = run_casa(
+        &[
+            "color-temp",
+            "living_light",
+            "--kelvin",
+            "2700",
+            "--config",
+            &config,
+        ],
+        &[("CASA_MAT_BIN", &fixture("mat_args.sh"))],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let v = stdout_json(&out);
+    assert_eq!(v["device"], "living_light");
+    assert_eq!(v["protocol"], "matter");
+    let expected = serde_json::json!(["color-temp", "--node", "1234", "--kelvin", "2700"]);
+    assert_eq!(v["value"]["args"], expected);
+}
+
+#[test]
+fn color_temp_mireds_with_transition_and_endpoint() {
+    let (config, _dir) = setup();
+    let out = run_casa(
+        &[
+            "color-temp",
+            "power_strip_outlet2",
+            "--mireds",
+            "370",
+            "--transition",
+            "30",
+            "--config",
+            &config,
+        ],
+        &[("CASA_MAT_BIN", &fixture("mat_args.sh"))],
+    );
+    assert_eq!(out.status.code(), Some(0));
+
+    let v = stdout_json(&out);
+    let expected = serde_json::json!([
+        "color-temp",
+        "--node",
+        "5678",
+        "--endpoint",
+        "2",
+        "--mireds",
+        "370",
+        "--transition",
+        "30"
+    ]);
+    assert_eq!(v["value"]["args"], expected);
+}
+
+#[test]
+fn color_temp_rejects_kelvin_and_mireds_together() {
+    let (config, _dir) = setup();
+    let out = run_casa(
+        &[
+            "color-temp",
+            "living_light",
+            "--kelvin",
+            "2700",
+            "--mireds",
+            "370",
+            "--config",
+            &config,
+        ],
+        &[],
+    );
+    // clap の排他エラー（既定 exit 2）。mat には到達しない。
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot be used with"), "stderr: {stderr}");
+}
+
+#[test]
+fn color_temp_requires_kelvin_or_mireds() {
+    let (config, _dir) = setup();
+    let out = run_casa(&["color-temp", "living_light", "--config", &config], &[]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("required arguments were not provided"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn color_temp_on_echonet_is_protocol_unsupported() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let out = run_casa(
+        &[
+            "color-temp",
+            "living_aircon",
+            "--kelvin",
+            "2700",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(14));
+    let err = stderr_error_json(&out);
+    assert_eq!(err["error"]["kind"], "protocol_unsupported");
+}
+
+#[test]
 fn off_with_endpoint_passes_flag() {
     let (config, _dir) = setup();
     let out = run_casa(

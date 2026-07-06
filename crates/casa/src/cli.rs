@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "casa", version, about = "スマートホーム横断クライアント")]
@@ -45,6 +45,21 @@ pub enum Command {
         name: String,
         /// プロパティ識別子。解釈はプロトコル依存（ECHONET: EPC `0x80` / Matter: `1/onoff/on-off`）
         property: String,
+    },
+    /// デバイスの色温度を変える（Matter: ColorControl コマンド invoke を mat color-temp に委譲）
+    #[command(group(ArgGroup::new("temp").required(true).args(["kelvin", "mireds"])))]
+    ColorTemp {
+        /// 設定ファイル上のデバイス名
+        name: String,
+        /// 色温度（ケルビン、例 2700）。--mireds と排他
+        #[arg(long, value_name = "K")]
+        kelvin: Option<String>,
+        /// 色温度（ミレッド、例 370）。--kelvin と排他
+        #[arg(long, value_name = "M")]
+        mireds: Option<String>,
+        /// 遷移時間。解釈は子 CLI 依存（mat にそのまま渡す）
+        #[arg(long, value_name = "T")]
+        transition: Option<String>,
     },
     /// 設定ファイルを読んで妥当性を JSON で報告する（実機は呼ばない）。
     /// version・必須フィールド・未知プロトコルは読み込み時点で検証済み。
