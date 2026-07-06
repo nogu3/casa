@@ -18,6 +18,10 @@ fn main() {
 
     let cli = Cli::parse();
     if let Err(err) = run(cli) {
+        // グループ部分失敗はメンバー別結果を stdout に出してから exit 15 する。
+        if let Some(response) = &err.response {
+            output::emit(response);
+        }
         eprintln!("{}", err.to_stderr_json());
         std::process::exit(err.exit_code());
     }

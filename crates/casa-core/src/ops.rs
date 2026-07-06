@@ -9,12 +9,13 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::adapter::{self, Adapter, ColorTemp, Invocation};
-use crate::config::{Config, Device};
+use crate::config::{Config, Device, Group};
 use crate::error::{CasaError, ErrorKind};
 use crate::{output, runner};
 
 /// `casa get <name> <property>`
 pub fn get(config: &Config, name: &str, property: &str) -> Result<Value, CasaError> {
+    reject_group(config, name, "get")?;
     let device = config.device(name)?;
     let adapter = require_adapter(device, "get")?;
     run_for_value(adapter.get(device, property), config, name, device, "get")
@@ -22,6 +23,11 @@ pub fn get(config: &Config, name: &str, property: &str) -> Result<Value, CasaErr
 
 /// `casa set <name> <property> <value>`
 pub fn set(config: &Config, name: &str, property: &str, value: &str) -> Result<Value, CasaError> {
+    if let Some(group) = config.groups.get(name) {
+        return run_group(config, name, group, "set", |adapter, device| {
+            adapter.set(device, property, value)
+        });
+    }
     let device = config.device(name)?;
     let adapter = require_adapter(device, "set")?;
     run_for_value(
@@ -67,6 +73,11 @@ pub fn validate(config: &Config, path: &Path) -> Value {
 /// `casa on <name>` / `casa off <name>`
 pub fn power(config: &Config, name: &str, on: bool) -> Result<Value, CasaError> {
     let op = if on { "on" } else { "off" };
+    if let Some(group) = config.groups.get(name) {
+        return run_group(config, name, group, op, |adapter, device| {
+            adapter.power(device, on)
+        });
+    }
     let device = config.device(name)?;
     let adapter = require_adapter(device, op)?;
     run_for_value(adapter.power(device, on), config, name, device, op)
@@ -74,6 +85,11 @@ pub fn power(config: &Config, name: &str, on: bool) -> Result<Value, CasaError> 
 
 /// `casa color-temp <name> --kelvin <k> | --mireds <m> [--transition <s>]`
 pub fn color_temp(config: &Config, name: &str, color: &ColorTemp) -> Result<Value, CasaError> {
+    if let Some(group) = config.groups.get(name) {
+        return run_group(config, name, group, "color-temp", |adapter, device| {
+            adapter.color_temp(device, color)
+        });
+    }
     let device = config.device(name)?;
     let adapter = require_adapter(device, "color-temp")?;
     run_for_value(
@@ -87,6 +103,7 @@ pub fn color_temp(config: &Config, name: &str, color: &ColorTemp) -> Result<Valu
 
 /// `casa describe <name>`
 pub fn describe(config: &Config, name: &str) -> Result<Value, CasaError> {
+    reject_group(config, name, "describe")?;
     let device = config.device(name)?;
     match describe_device(config, device)? {
         Some(properties) => Ok(output::describe_response(name, device, properties)),
@@ -104,6 +121,86 @@ pub fn describe_device(config: &Config, device: &Device) -> Result<Option<Value>
         return Ok(None);
     };
     Ok(Some(execute(config, &invocation)?))
+}
+
+/// グループ書き系操作の共通パイプライン。各メンバーの Invocation を組み、
+/// 全子プロセスを並列に spawn してから、設定ファイル上のメンバー記載順に回収する。
+///
+/// - Invocation を組めないメンバー（アダプタ未実装 / 操作未対応）は spawn せず
+///   メンバー別エラーとして results に載せる。
+/// - 1 件でも失敗があれば `group_partial_failure`（exit 15）。stdout に出すべき
+///   メンバー別結果は `CasaError::response` に載せて main まで運ぶ。
+fn run_group(
+    config: &Config,
+    group_name: &str,
+    group: &Group,
+    operation: &str,
+    build: impl Fn(&'static dyn Adapter, &Device) -> Option<Invocation>,
+) -> Result<Value, CasaError> {
+    // メンバー名はロード時に検証済みなので device() は失敗しない。
+    let members: Vec<(&String, &Device)> = group
+        .members
+        .iter()
+        .map(|m| Ok((m, config.device(m)?)))
+        .collect::<Result<_, CasaError>>()?;
+
+    let prepared: Vec<Result<Invocation, CasaError>> = members
+        .iter()
+        .map(|(_, device)| {
+            let adapter = require_adapter(device, operation)?;
+            build(adapter, device).ok_or_else(|| unsupported(device, operation))
+        })
+        .collect();
+
+    let commands: Vec<(String, Vec<String>)> = prepared
+        .iter()
+        .filter_map(|p| p.as_ref().ok())
+        .map(|inv| (runner::resolve_bin(inv.bin, config), inv.args.clone()))
+        .collect();
+    let mut spawned = runner::run_parallel(&commands).into_iter();
+
+    let outcomes: Vec<Result<Value, CasaError>> = prepared
+        .into_iter()
+        .map(|p| match p {
+            Ok(_) => spawned
+                .next()
+                .expect("run_parallel returns one result per command"),
+            Err(e) => Err(e),
+        })
+        .collect();
+
+    let failed = outcomes.iter().filter(|o| o.is_err()).count();
+    let results: Vec<Value> = members
+        .iter()
+        .zip(&outcomes)
+        .map(|((name, device), outcome)| output::group_member_result(name, device, outcome))
+        .collect();
+    let response = output::group_response(group_name, results);
+
+    if failed == 0 {
+        Ok(response)
+    } else {
+        Err(CasaError::new(
+            ErrorKind::GroupPartialFailure,
+            format!(
+                "{failed}/{} member(s) of group \"{group_name}\" failed during \"{operation}\"",
+                group.members.len()
+            ),
+        )
+        .with_response(response))
+    }
+}
+
+/// 読み系（get / describe）はグループ非対応。グループ名なら明示エラーにする
+/// （黙って name_not_found にすると「なぜ list には出るのに」と混乱するため）。
+fn reject_group(config: &Config, name: &str, operation: &str) -> Result<(), CasaError> {
+    if config.groups.contains_key(name) {
+        return Err(CasaError::new(
+            ErrorKind::ProtocolUnsupported,
+            format!("groups are not supported for \"{operation}\"; specify a device name"),
+        ));
+    }
+    Ok(())
 }
 
 /// アダプタが組んだ呼び出しを実行し、casa スキーマの応答に包む。
@@ -220,5 +317,104 @@ device_id = "DUMMY-XX-XX"
 
         let err = run_for_value(invocation, &config, "virtual_device", &device, "set").unwrap_err();
         assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+    }
+
+    const GROUP_CONFIG: &str = r#"
+version = 1
+
+[devices.light1]
+protocol = "echonet"
+ip = "192.0.2.11"
+eoj = "0x029101"
+
+[devices.light2]
+protocol = "echonet"
+ip = "192.0.2.12"
+eoj = "0x029101"
+
+[groups.living]
+members = ["light1", "light2"]
+"#;
+
+    /// echo を子 CLI の代役にして、run_group の成功パスを通す。
+    fn echo_invocation(device: &Device) -> Option<Invocation> {
+        let Device::Echonet { ip, .. } = device else {
+            panic!("test config only has echonet devices");
+        };
+        Some(Invocation {
+            bin: "echo",
+            args: vec![format!(r#"{{"ip": "{ip}"}}"#)],
+        })
+    }
+
+    #[test]
+    fn run_group_collects_member_results_in_config_order() {
+        let config = config::parse(GROUP_CONFIG).unwrap();
+        let group = config.groups.get("living").unwrap();
+
+        let response =
+            run_group(&config, "living", group, "on", |_, device| echo_invocation(device))
+                .unwrap();
+
+        assert_eq!(response["group"], "living");
+        assert!(response["timestamp"].is_string());
+        let results = response["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["device"], "light1");
+        assert_eq!(results[0]["ok"], true);
+        assert_eq!(results[0]["value"]["ip"], "192.0.2.11");
+        assert_eq!(results[1]["device"], "light2");
+        assert_eq!(results[1]["value"]["ip"], "192.0.2.12");
+    }
+
+    #[test]
+    fn run_group_partial_failure_is_exit_15_with_response() {
+        let config = config::parse(GROUP_CONFIG).unwrap();
+        let group = config.groups.get("living").unwrap();
+
+        // light2 だけ操作未対応（None）にして部分失敗を作る。
+        let err = run_group(&config, "living", group, "on", |_, device| match device {
+            Device::Echonet { ip, .. } if ip == "192.0.2.11" => echo_invocation(device),
+            _ => None,
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::GroupPartialFailure);
+        assert_eq!(err.exit_code(), 15);
+        let response = err.response.unwrap();
+        let results = response["results"].as_array().unwrap();
+        assert_eq!(results[0]["ok"], true);
+        assert_eq!(results[1]["ok"], false);
+        assert_eq!(results[1]["error"]["kind"], "protocol_unsupported");
+    }
+
+    #[test]
+    fn power_dispatches_group_names_to_group_pipeline() {
+        // enl を存在しないパスに向けることで、「グループ経路に入り、メンバーごとに
+        // child_not_found で失敗し、exit 15 が返る」ことを実機なしで検証する。
+        let text = format!("{GROUP_CONFIG}\n[binaries]\nenl = \"/nonexistent/enl\"\n");
+        let config = config::parse(&text).unwrap();
+
+        let err = power(&config, "living", true).unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::GroupPartialFailure);
+        let response = err.response.unwrap();
+        let results = response["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["error"]["kind"], "child_not_found");
+        assert_eq!(results[0]["error"]["exit_code"], 12);
+    }
+
+    #[test]
+    fn get_and_describe_reject_group_names() {
+        let config = config::parse(GROUP_CONFIG).unwrap();
+
+        let err = get(&config, "living", "0x80").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert!(err.detail.contains("get"), "detail: {}", err.detail);
+
+        let err = describe(&config, "living").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert!(err.detail.contains("describe"), "detail: {}", err.detail);
     }
 }
