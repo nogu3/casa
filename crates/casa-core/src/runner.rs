@@ -3,7 +3,7 @@
 //! casa はプロトコルを直接喋らない。実機との通信はすべてここから起動する
 //! 兄弟 CLI（`enl` 等）に委譲する。
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::config::Config;
 use crate::error::{CasaError, ErrorKind};
@@ -39,6 +39,52 @@ pub fn run(bin: &str, args: &[String]) -> Result<serde_json::Value, CasaError> {
         )
     })?;
 
+    collect(bin, output)
+}
+
+/// 複数の子 CLI を並列に実行する。全子プロセスを先に spawn してから
+/// 記載順に回収するので、体感で「同時」に動く。スレッド・非同期ランタイム
+/// は使わない（依存ゼロ維持）。子 CLI の出力は小さい JSON なので、逐次
+/// 回収でもパイプバッファ詰まりは実質問題にならない。
+///
+/// 1 要素の失敗（spawn 失敗・非ゼロ終了・不正 JSON）は他の要素に影響しない。
+pub fn run_parallel(commands: &[(String, Vec<String>)]) -> Vec<Result<serde_json::Value, CasaError>> {
+    let children: Vec<Result<std::process::Child, CasaError>> = commands
+        .iter()
+        .map(|(bin, args)| {
+            tracing::debug!(bin, ?args, "spawning child CLI (parallel)");
+            Command::new(bin)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    CasaError::new(
+                        ErrorKind::ChildNotFound,
+                        format!("failed to execute child CLI \"{bin}\": {e}"),
+                    )
+                })
+        })
+        .collect();
+
+    children
+        .into_iter()
+        .zip(commands)
+        .map(|(child, (bin, _))| {
+            let output = child?.wait_with_output().map_err(|e| {
+                CasaError::new(
+                    ErrorKind::ChildFailed(1),
+                    format!("failed to wait for child CLI \"{bin}\": {e}"),
+                )
+            })?;
+            collect(bin, output)
+        })
+        .collect()
+}
+
+/// 終了した子プロセスの output を casa の Result に変換する共通処理。
+fn collect(bin: &str, output: std::process::Output) -> Result<serde_json::Value, CasaError> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in stderr.lines().filter(|l| !l.trim().is_empty()) {
         tracing::debug!(child = bin, stderr = line, "child CLI stderr");
@@ -81,5 +127,31 @@ mod tests {
     fn resolve_bin_prefers_config_binaries() {
         let config = config_with_binaries("enl = \"/opt/bin/enl\"");
         assert_eq!(resolve_bin("enl", &config), "/opt/bin/enl");
+    }
+
+    #[test]
+    fn run_parallel_returns_results_in_order() {
+        let commands = vec![
+            ("echo".to_string(), vec![r#"{"n": 1}"#.to_string()]),
+            ("echo".to_string(), vec![r#"{"n": 2}"#.to_string()]),
+        ];
+        let results = run_parallel(&commands);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].as_ref().unwrap()["n"], 1);
+        assert_eq!(results[1].as_ref().unwrap()["n"], 2);
+    }
+
+    #[test]
+    fn run_parallel_isolates_member_failures() {
+        let commands = vec![
+            ("/nonexistent/casa-child".to_string(), vec![]),
+            ("echo".to_string(), vec![r#"{"ok": true}"#.to_string()]),
+        ];
+        let results = run_parallel(&commands);
+        assert_eq!(
+            results[0].as_ref().unwrap_err().kind,
+            ErrorKind::ChildNotFound
+        );
+        assert_eq!(results[1].as_ref().unwrap()["ok"], true);
     }
 }
