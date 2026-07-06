@@ -38,7 +38,12 @@ fn run(cli: Cli) -> Result<(), CasaError> {
                 }
                 devices.push(entry);
             }
-            output::list_response(devices)
+            let groups = config
+                .groups
+                .iter()
+                .map(|(name, group)| output::group_entry(name, group))
+                .collect();
+            output::list_response(devices, groups)
         }
         Command::Get { name, property } => ops::get(&config, &name, &property)?,
         Command::Set {

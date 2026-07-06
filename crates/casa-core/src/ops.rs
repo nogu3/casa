@@ -58,6 +58,7 @@ pub fn validate(config: &Config, path: &Path) -> Value {
         path,
         config.version,
         config.devices.len(),
+        config.groups.len(),
         protocols,
         warnings,
     )
@@ -200,6 +201,7 @@ device_id = "DUMMY-XX-XX"
         assert_eq!(report["config"], "/tmp/devices.toml");
         assert_eq!(report["protocols"]["echonet"], 1);
         assert_eq!(report["protocols"]["switchbot"], 1);
+        assert_eq!(report["group_count"], 0);
         assert!(report["timestamp"].is_string());
 
         // switchbot はアダプタ未実装なので no_adapter 警告が 1 件だけ出る。
