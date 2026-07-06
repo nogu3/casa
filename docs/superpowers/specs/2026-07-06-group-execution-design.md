@@ -96,9 +96,14 @@ members = ["living_light", "living_aircon"]
 | `crates/casa-core/src/output.rs` | `group_response` 追加、`list_response` に groups |
 | `crates/casa-core/src/error.rs` | `ErrorKind::GroupPartialFailure` → exit 15 |
 | `crates/casa/src/cli.rs`, `main.rs` | 変更ほぼなし（名前解決が透過的なため） |
+| `crates/casa-core/src/config.rs` | `Config::ensure_target` 追加（device/group どちらでも存在チェックのみ行う） |
+| `crates/casad/src/main.rs` | `exec` の spawn 前検証を `config.device()` → `config.ensure_target()` に変更（グループ名を許可） |
+| `crates/casad/src/rules.rs` | `then.device`（アクション対象）の検証を `ensure_target` 経由に変更しグループを許可。`when.device`（イベント発火元）は実デバイスが必要なため `config.device()` のまま |
 
-casad は casa を子プロセスとして呼ぶだけなので、rules.toml からグループ名がそのまま使える
-（casad 側変更ゼロ）。
+casad は casa を子プロセスとして呼ぶだけだが、casad 自身も spawn 前に名前を検証しており
+（`casad exec` と rules.toml の `then.device`）、そこは devices のみ参照だったためグループ名を
+弾いていた。最終レビューで発見し、上記 2 箇所を `Config::ensure_target` 経由に変更して
+グループ名を通すよう修正した（当初の「casad 側変更ゼロ」という想定は誤りだった）。
 
 ## テスト
 

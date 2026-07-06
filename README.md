@@ -72,7 +72,7 @@ ECHONET Lite なら EPC（例 `0x80`）、Matter なら `endpoint/cluster/attrib
 
 ```json
 {
-  "timestamp": "2026-07-06T12:34:56+09:00",
+  "timestamp": "2026-06-02T12:34:56+09:00",
   "group": "living",
   "results": [
     {"device": "living_light", "protocol": "matter", "ok": true, "value": {}},
@@ -83,6 +83,9 @@ ECHONET Lite なら EPC（例 `0x80`）、Matter なら `endpoint/cluster/attrib
 ```
 
 全員成功なら exit 0、1 件でも失敗したら exit 15（`group_partial_failure`）。
+
+`set` はプロパティセレクタがプロトコル依存のため、混在グループ（例: echonet + matter）では
+片方のプロトコルに無意味なセレクタが飛ぶ。同一プロトコルのグループでのみ実用的。
 
 stdout には純粋な構造化 JSON のみを出す。`timestamp`（ISO 8601）を必ず含む。
 
@@ -256,6 +259,7 @@ casa 自体のエラーは stderr に 1 行 JSON で出る:
 | `child_failed` | 子 CLI が非ゼロで終了（コードを伝播） | 子 CLI のコード |
 | `child_invalid_output` | 子 CLI の stdout が JSON でない | 13 |
 | `protocol_unsupported` | そのプロトコルでは未対応の操作 | 14 |
+| `group_partial_failure` | グループ実行でメンバーの一部または全部が失敗 | 15 |
 
 ## casad（常駐レイヤ: 自動化ルール）
 
