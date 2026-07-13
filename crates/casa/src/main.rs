@@ -55,6 +55,11 @@ fn run(cli: Cli) -> Result<(), CasaError> {
             property,
             value,
         } => ops::set(&config, &name, &property, &value)?,
+        Command::Invoke {
+            name,
+            command,
+            args,
+        } => ops::invoke(&config, &name, &command, &args)?,
         Command::Validate => {
             let path = cli.config.clone().unwrap_or_else(config::default_path);
             ops::validate(&config, &path)

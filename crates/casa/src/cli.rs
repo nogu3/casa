@@ -75,4 +75,16 @@ pub enum Command {
         /// 書き込む値。子 CLI にそのまま渡す
         value: String,
     },
+    /// プロトコル固有 CLI のコマンドを名前解決付きで呼び出す（長尾操作の汎用動詞）。
+    /// `<command>` と後続引数は解釈せず子 CLI へそのまま渡す。
+    /// casa 自身のフラグ（--config 等）は invoke より前に置くこと。
+    Invoke {
+        /// 設定ファイル上のデバイス名またはグループ名（グループは同一プロトコルのみ）
+        name: String,
+        /// 子 CLI のサブコマンド名（例: color-temp）。casa は解釈しない
+        command: String,
+        /// 子 CLI にそのまま渡す引数
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
