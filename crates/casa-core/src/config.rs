@@ -18,7 +18,7 @@ pub struct Config {
     pub version: u32,
     #[serde(default)]
     pub devices: BTreeMap<String, Device>,
-    /// デバイスをまとめて操作するグループ。書き系（on/off/color-temp/set）のみ対応。
+    /// デバイスをまとめて操作するグループ。書き系（on/off/set/invoke）のみ対応。
     /// メンバー整合性はロード時に検証済みなので、実行時の名前解決は失敗しない。
     #[serde(default)]
     pub groups: BTreeMap<String, Group>,

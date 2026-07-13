@@ -64,19 +64,6 @@ fn run(cli: Cli) -> Result<(), CasaError> {
             let path = cli.config.clone().unwrap_or_else(config::default_path);
             ops::validate(&config, &path)
         }
-        Command::ColorTemp {
-            name,
-            kelvin,
-            mireds,
-            transition,
-        } => {
-            let color = casa_core::adapter::ColorTemp {
-                kelvin,
-                mireds,
-                transition,
-            };
-            ops::color_temp(&config, &name, &color)?
-        }
         Command::Describe { name } => ops::describe(&config, &name)?,
         Command::On { name } => ops::power(&config, &name, true)?,
         Command::Off { name } => ops::power(&config, &name, false)?,

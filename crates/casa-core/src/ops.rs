@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::adapter::{self, Adapter, ColorTemp, Invocation};
+use crate::adapter::{self, Adapter, Invocation};
 use crate::config::{Config, Device, Group};
 use crate::error::{CasaError, ErrorKind};
 use crate::{output, runner};
@@ -81,24 +81,6 @@ pub fn power(config: &Config, name: &str, on: bool) -> Result<Value, CasaError> 
     let device = config.device(name)?;
     let adapter = require_adapter(device, op)?;
     run_for_value(adapter.power(device, on), config, name, device, op)
-}
-
-/// `casa color-temp <name> --kelvin <k> | --mireds <m> [--transition <s>]`
-pub fn color_temp(config: &Config, name: &str, color: &ColorTemp) -> Result<Value, CasaError> {
-    if let Some(group) = config.groups.get(name) {
-        return run_group(config, name, group, "color-temp", |adapter, device| {
-            adapter.color_temp(device, color)
-        });
-    }
-    let device = config.device(name)?;
-    let adapter = require_adapter(device, "color-temp")?;
-    run_for_value(
-        adapter.color_temp(device, color),
-        config,
-        name,
-        device,
-        "color-temp",
-    )
 }
 
 /// `casa invoke <name> <command> [args...]` — 長尾のプロトコル固有操作の汎用動詞。

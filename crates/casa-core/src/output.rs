@@ -95,7 +95,7 @@ pub fn group_member_result(
     }
 }
 
-/// グループ操作（on / off / color-temp / set）の応答。
+/// グループ操作（on / off / set / invoke）の応答。
 /// `results` の順序は設定ファイル上のメンバー記載順。
 pub fn group_response(group: &str, results: Vec<Value>) -> Value {
     json!({

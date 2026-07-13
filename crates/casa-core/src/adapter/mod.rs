@@ -18,15 +18,6 @@ pub struct Invocation {
     pub args: Vec<String>,
 }
 
-/// `color-temp` ショートカットの指定値。kelvin / mireds の排他は CLI 層（clap）が
-/// 保証する。値は事前検証せず子 CLI にそのまま渡す（範囲外は mat / デバイス側が clamp）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ColorTemp {
-    pub kelvin: Option<String>,
-    pub mireds: Option<String>,
-    pub transition: Option<String>,
-}
-
 /// プロトコル固有 CLI への引数組み立てを担う。プロトコルの知識はここに閉じる。
 ///
 /// 未対応の操作は `None` を返し、呼び出し側（ops 層)が `protocol_unsupported`
@@ -50,11 +41,6 @@ pub trait Adapter {
 
     fn power(&self, device: &Device, on: bool) -> Option<Invocation> {
         let _ = (device, on);
-        None
-    }
-
-    fn color_temp(&self, device: &Device, color: &ColorTemp) -> Option<Invocation> {
-        let _ = (device, color);
         None
     }
 
