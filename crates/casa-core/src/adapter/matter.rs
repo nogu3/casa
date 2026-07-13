@@ -122,6 +122,19 @@ impl Adapter for MatterAdapter {
         }
         Some(invocation(args))
     }
+
+    /// endpoint は設定にあれば注入する（`power` と同じ流儀）。そのコマンドが
+    /// `--endpoint` を取らない場合は mat 側のエラーが exit code 伝播で見える。
+    fn invoke(&self, device: &Device, command: &str, args: &[String]) -> Option<Invocation> {
+        let (node, endpoint) = address(device)?;
+        let mut all = vec![command.to_string(), "--node".to_string(), node.to_string()];
+        if let Some(ep) = endpoint {
+            all.push("--endpoint".to_string());
+            all.push(ep.to_string());
+        }
+        all.extend(args.iter().cloned());
+        Some(invocation(all))
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +302,37 @@ mod tests {
                 "2700",
                 "--transition",
                 "30"
+            ]
+        );
+    }
+
+    #[test]
+    fn invoke_injects_node_and_passes_args_through() {
+        let extra: Vec<String> = vec!["--kelvin".into(), "2700".into()];
+        let inv = MatterAdapter.invoke(&device(), "color-temp", &extra).unwrap();
+        assert_eq!(inv.bin, "mat");
+        assert_eq!(
+            args(&inv),
+            ["color-temp", "--node", "1234", "--kelvin", "2700"]
+        );
+    }
+
+    #[test]
+    fn invoke_with_endpoint_injects_endpoint_flag() {
+        let extra: Vec<String> = vec!["--mireds".into(), "370".into()];
+        let inv = MatterAdapter
+            .invoke(&device_on_endpoint(2), "color-temp", &extra)
+            .unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "color-temp",
+                "--node",
+                "1234",
+                "--endpoint",
+                "2",
+                "--mireds",
+                "370"
             ]
         );
     }

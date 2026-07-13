@@ -53,6 +53,19 @@ impl Adapter for EchonetAdapter {
         let value = if on { POWER_ON } else { POWER_OFF };
         self.set(device, POWER_EPC, value)
     }
+
+    fn invoke(&self, device: &Device, command: &str, args: &[String]) -> Option<Invocation> {
+        let (ip, eoj) = address(device)?;
+        let mut all = vec![
+            command.to_string(),
+            "--ip".to_string(),
+            ip.to_string(),
+            "--eoj".to_string(),
+            eoj.to_string(),
+        ];
+        all.extend(args.iter().cloned());
+        Some(Invocation { bin: BIN, args: all })
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +164,34 @@ mod tests {
                 "--value",
                 "0x31"
             ]
+        );
+    }
+
+    #[test]
+    fn invoke_injects_address_and_passes_args_through() {
+        let extra: Vec<String> = vec!["--epc".into(), "0x80".into()];
+        let inv = EchonetAdapter.invoke(&device(), "blink", &extra).unwrap();
+        assert_eq!(inv.bin, "enl");
+        assert_eq!(
+            args(&inv),
+            [
+                "blink",
+                "--ip",
+                "192.0.2.10",
+                "--eoj",
+                "0x013001",
+                "--epc",
+                "0x80"
+            ]
+        );
+    }
+
+    #[test]
+    fn invoke_with_no_extra_args_is_just_command_and_address() {
+        let inv = EchonetAdapter.invoke(&device(), "blink", &[]).unwrap();
+        assert_eq!(
+            args(&inv),
+            ["blink", "--ip", "192.0.2.10", "--eoj", "0x013001"]
         );
     }
 }

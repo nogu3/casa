@@ -57,6 +57,14 @@ pub trait Adapter {
         let _ = (device, color);
         None
     }
+
+    /// 長尾のプロトコル固有操作の汎用動詞。`command` は子 CLI のサブコマンド名を
+    /// そのまま受け取り（casa は解釈しない）、アドレスフラグを注入して `args` を
+    /// 素通しする。アドレス注入がコマンドによらずプロトコルごとに一様であることが前提。
+    fn invoke(&self, device: &Device, command: &str, args: &[String]) -> Option<Invocation> {
+        let _ = (device, command, args);
+        None
+    }
 }
 
 /// 設定の `protocol` フィールド（= `Device` の variant）が dispatch の唯一の真実。
