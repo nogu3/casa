@@ -14,8 +14,6 @@ use serde::{Deserialize, Serialize};
 use casa_core::config::Config;
 use casa_core::error::{CasaError, ErrorKind};
 
-use crate::action::Action;
-
 /// casad が理解するルールファイルのバージョン。
 pub const SUPPORTED_VERSION: u32 = 1;
 
@@ -49,11 +47,57 @@ pub enum Trigger {
     Time { at: String },
 }
 
-/// アクション。`then = { action = "on", device = "hallway_light" }`
+/// アクション。`action` フィールドが serde の tag。
+/// - `then = { action = "on", device = "hallway_light" }`
+/// - `then = { action = "invoke", device = "desk_light", command = "color-temp", args = ["--kelvin", "2700"] }`
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Then {
-    pub action: Action,
-    pub device: String,
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum Then {
+    On {
+        device: String,
+    },
+    Off {
+        device: String,
+    },
+    Invoke {
+        device: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+}
+
+impl Then {
+    /// アクション対象の名前（device または group。名前解決は casa 側が担う）。
+    pub fn device(&self) -> &str {
+        match self {
+            Then::On { device } | Then::Off { device } | Then::Invoke { device, .. } => device,
+        }
+    }
+
+    /// casa の引数列へ変換する。casa の CLI 表面に対する casad の知識はここに閉じる。
+    /// `--config` は casa の clap グローバルフラグとしてサブコマンドより**前**に置く
+    /// （invoke の trailing 引数に呑まれないため。on/off も並びを揃える）。
+    pub fn casa_args(&self, config: Option<&Path>) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(path) = config {
+            out.push("--config".to_string());
+            out.push(path.to_string_lossy().into_owned());
+        }
+        match self {
+            Then::On { device } => out.extend(["on".to_string(), device.clone()]),
+            Then::Off { device } => out.extend(["off".to_string(), device.clone()]),
+            Then::Invoke {
+                device,
+                command,
+                args,
+            } => {
+                out.extend(["invoke".to_string(), device.clone(), command.clone()]);
+                out.extend(args.iter().cloned());
+            }
+        }
+        out
+    }
 }
 
 /// TOML 文字列をパースし、バージョンを検証する。
@@ -114,7 +158,7 @@ impl RuleFile {
             if let Trigger::Event { device, .. } = &rule.when {
                 check_device(config, &rule.name, device)?;
             }
-            check_target(config, &rule.name, &rule.then.device)?;
+            check_target(config, &rule.name, rule.then.device())?;
         }
         Ok(())
     }
@@ -174,7 +218,82 @@ eoj = "0x029001"
         assert_eq!(file.rules.len(), 2);
         assert!(matches!(file.rules[0].when, Trigger::Event { .. }));
         assert!(matches!(file.rules[1].when, Trigger::Time { .. }));
-        assert_eq!(file.rules[0].then.action, Action::On);
+        assert!(matches!(file.rules[0].then, Then::On { .. }));
+    }
+
+    #[test]
+    fn parses_invoke_rule_with_args() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "日没で電球色"
+when = { at = "18:00" }
+then = { action = "invoke", device = "hallway_light", command = "color-temp", args = ["--kelvin", "2700"] }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].then {
+            Then::Invoke {
+                device,
+                command,
+                args,
+            } => {
+                assert_eq!(device, "hallway_light");
+                assert_eq!(command, "color-temp");
+                assert_eq!(args, &["--kelvin", "2700"]);
+            }
+            other => panic!("unexpected then: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invoke_rule_args_default_to_empty() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "argsなし"
+when = { at = "18:00" }
+then = { action = "invoke", device = "hallway_light", command = "blink" }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].then {
+            Then::Invoke { args, .. } => assert!(args.is_empty()),
+            other => panic!("unexpected then: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn casa_args_places_config_before_subcommand() {
+        use std::path::Path;
+        let then = Then::Invoke {
+            device: "hallway_light".into(),
+            command: "color-temp".into(),
+            args: vec!["--kelvin".into(), "2700".into()],
+        };
+        assert_eq!(
+            then.casa_args(Some(Path::new("/tmp/d.toml"))),
+            [
+                "--config",
+                "/tmp/d.toml",
+                "invoke",
+                "hallway_light",
+                "color-temp",
+                "--kelvin",
+                "2700"
+            ]
+        );
+        // on/off も --config が先頭（casa の clap グローバルフラグ）。
+        let on = Then::On {
+            device: "hallway_light".into(),
+        };
+        assert_eq!(
+            on.casa_args(Some(Path::new("/tmp/d.toml"))),
+            ["--config", "/tmp/d.toml", "on", "hallway_light"]
+        );
+        assert_eq!(on.casa_args(None), ["on", "hallway_light"]);
     }
 
     #[test]

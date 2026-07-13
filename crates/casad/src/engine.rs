@@ -65,7 +65,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
 /// 1 つのルールの `then` を casa の spawn で実行する。
 /// `config_path` は casa へ渡す `--config`（None なら casa が既定パスを解決）。
 pub fn fire(rule: &Rule, config_path: Option<&Path>) -> Result<i32, CasaError> {
-    let args = rule.then.action.casa_args(&rule.then.device, config_path);
+    let args = rule.then.casa_args(config_path);
     tracing::info!(rule = %rule.name, "firing rule");
     casa_runner::run_casa(&args)
 }
