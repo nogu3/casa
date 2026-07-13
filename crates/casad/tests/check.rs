@@ -14,6 +14,10 @@ then = { action = "on", device = "living_aircon" }
 name = "22時消灯"
 when = { at = "22:00" }
 then = { action = "off", device = "living_aircon" }
+[[rules]]
+name = "起床時に色温度を調整"
+when = { at = "07:00" }
+then = { action = "invoke", device = "living_aircon", command = "color-temp", args = ["--kelvin", "2700"] }
 "#;
 
 fn write_rules(dir: &std::path::Path, text: &str) -> std::path::PathBuf {
@@ -46,10 +50,14 @@ fn check_valid_rules_reports_count() {
         )
     });
     assert_eq!(v["ok"], true);
-    assert_eq!(v["count"], 2);
-    assert_eq!(v["rules"].as_array().unwrap().len(), 2);
+    assert_eq!(v["count"], 3);
+    assert_eq!(v["rules"].as_array().unwrap().len(), 3);
     // casad の解釈（パース結果）がそのまま返る。
     assert_eq!(v["rules"][0]["then"]["action"], "on");
+    // invoke ルールも then がそのまま JSON 化される（command / args を含む）。
+    assert_eq!(v["rules"][2]["then"]["action"], "invoke");
+    assert_eq!(v["rules"][2]["then"]["command"], "color-temp");
+    assert_eq!(v["rules"][2]["then"]["args"], serde_json::json!(["--kelvin", "2700"]));
 }
 
 #[test]

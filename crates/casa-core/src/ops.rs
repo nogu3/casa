@@ -125,6 +125,7 @@ fn ensure_uniform_protocol(
     group: &Group,
     command: &str,
 ) -> Result<(), CasaError> {
+    // メンバー名はロード時に検証済みなので device() は失敗しない。
     let protocols: BTreeSet<&str> = group
         .members
         .iter()

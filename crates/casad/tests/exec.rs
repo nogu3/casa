@@ -124,6 +124,12 @@ fn exec_invoke_spawns_casa_with_passthrough_args() {
         "stdout: {stdout}"
     );
     assert!(stdout.contains("--config"), "stdout: {stdout}");
+    let config_pos = stdout.find("--config").expect("--config missing");
+    let invoke_pos = stdout.find("invoke").expect("invoke missing");
+    assert!(
+        config_pos < invoke_pos,
+        "--config must precede invoke (trailing 引数対策): {stdout}"
+    );
 }
 
 #[test]

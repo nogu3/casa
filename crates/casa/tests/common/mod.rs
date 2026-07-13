@@ -1,5 +1,9 @@
 //! 統合テスト共通ヘルパ。casa バイナリを子プロセスとして起動する。
 
+// 各テストバイナリが本モジュールを個別にコンパイルするため、
+// 一部のヘルパしか使わないバイナリで dead_code が誤発火する。
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
