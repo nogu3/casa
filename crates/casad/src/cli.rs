@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::action::Action;
+use crate::rules::Then;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -31,11 +31,8 @@ pub enum Command {
     /// 名前を解決し、対応する casa アクションを実行する。
     /// ルールエンジンが発火時に使うアクション実行プリミティブの最小形。
     Exec {
-        /// 実行するアクション
-        #[arg(value_enum)]
-        action: Action,
-        /// 設定ファイル上のデバイス名
-        name: String,
+        #[command(subcommand)]
+        action: ExecAction,
     },
     /// ルールファイルをパースし、参照デバイスが設定に存在するか・時刻が正しいか検証する。
     /// エンジンに載せる前にルールの正しさを確認する用途。
@@ -59,4 +56,49 @@ pub enum Command {
         #[arg(long, conflicts_with = "once")]
         listen_once: bool,
     },
+}
+
+/// `casad exec` のアクション。rules の `then` と同じ語彙（on / off / invoke）。
+#[derive(Debug, Subcommand)]
+pub enum ExecAction {
+    /// デバイス（またはグループ）の電源を入れる
+    On {
+        /// 設定ファイル上のデバイス名またはグループ名
+        name: String,
+    },
+    /// デバイス（またはグループ）の電源を切る
+    Off {
+        /// 設定ファイル上のデバイス名またはグループ名
+        name: String,
+    },
+    /// 子 CLI のコマンドを名前解決付きで呼び出す（casa invoke へ委譲）。
+    /// casad 自身のフラグ（--config 等）は exec より前に置くこと。
+    Invoke {
+        /// 設定ファイル上のデバイス名またはグループ名
+        name: String,
+        /// 子 CLI のサブコマンド名（例: color-temp）
+        command: String,
+        /// 子 CLI にそのまま渡す引数
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+}
+
+impl ExecAction {
+    /// rules の `Then` へ変換する。exec と rules で casa 引数列の写像を共有する。
+    pub fn into_then(self) -> Then {
+        match self {
+            ExecAction::On { name } => Then::On { device: name },
+            ExecAction::Off { name } => Then::Off { device: name },
+            ExecAction::Invoke {
+                name,
+                command,
+                args,
+            } => Then::Invoke {
+                device: name,
+                command,
+                args,
+            },
+        }
+    }
 }

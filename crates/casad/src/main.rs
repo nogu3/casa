@@ -1,4 +1,3 @@
-mod action;
 mod casa_runner;
 mod cli;
 mod engine;
@@ -32,15 +31,16 @@ fn main() {
 
 fn run(cli: Cli) -> Result<i32, CasaError> {
     match cli.command {
-        Command::Exec { action, name } => {
+        Command::Exec { action } => {
             // link 側: 設定ロードと名前解決は casa-core で型安全に。未定義名は casa を
             // 起動する前に exit 11 で弾く（ルールエンジンが発火前にルールを検証できる根拠）。
             // device / group どちらでもよい（グループのメンバー展開は casa 側が担う）。
+            let then = action.into_then();
             let config = config::load(cli.config.as_deref())?;
-            config.ensure_target(&name)?;
+            config.ensure_target(then.device())?;
 
             // spawn 側: 実機アクションは casa を子プロセスとして起動し、exit code を伝播する。
-            let args = action.casa_args(&name, cli.config.as_deref());
+            let args = then.casa_args(cli.config.as_deref());
             casa_runner::run_casa(&args)
         }
         Command::Check { rules } => {
