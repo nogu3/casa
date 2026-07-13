@@ -43,6 +43,13 @@ pub fn device_response(name: &str, device: &Device, value: Value) -> Value {
     })
 }
 
+/// `casa invoke` の応答。何を invoke したか応答から追跡できるよう `command` を含める。
+pub fn invoke_response(name: &str, device: &Device, command: &str, value: Value) -> Value {
+    let mut response = device_response(name, device, value);
+    response["command"] = json!(command);
+    response
+}
+
 /// `casa describe` の応答。
 pub fn describe_response(name: &str, device: &Device, properties: Value) -> Value {
     json!({
@@ -198,5 +205,24 @@ mod tests {
         let response = list_response(vec![], vec![group_entry("living", &group)]);
         assert_eq!(response["groups"][0]["name"], "living");
         assert_eq!(response["groups"][0]["members"][1], "b");
+    }
+
+    #[test]
+    fn invoke_response_includes_command_field() {
+        let device = Device::Echonet {
+            ip: "192.0.2.10".into(),
+            eoj: "0x013001".into(),
+        };
+        let v = invoke_response(
+            "living_aircon",
+            &device,
+            "blink",
+            serde_json::json!({"ok": true}),
+        );
+        assert_eq!(v["device"], "living_aircon");
+        assert_eq!(v["protocol"], "echonet");
+        assert_eq!(v["command"], "blink");
+        assert_eq!(v["value"]["ok"], true);
+        assert!(v["timestamp"].is_string());
     }
 }
