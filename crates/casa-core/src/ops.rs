@@ -3,7 +3,7 @@
 //! プロトコル固有の知識はすべて adapter 層にあり、ここはプロトコル非依存。
 //! 新プロトコルを追加してもこのファイルは変更しない。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::{json, Value};
@@ -99,6 +99,67 @@ pub fn color_temp(config: &Config, name: &str, color: &ColorTemp) -> Result<Valu
         device,
         "color-temp",
     )
+}
+
+/// `casa invoke <name> <command> [args...]` — 長尾のプロトコル固有操作の汎用動詞。
+/// `command` は子 CLI のサブコマンド名そのままで、casa は解釈しない。
+pub fn invoke(
+    config: &Config,
+    name: &str,
+    command: &str,
+    args: &[String],
+) -> Result<Value, CasaError> {
+    if let Some(group) = config.groups.get(name) {
+        ensure_uniform_protocol(config, name, group, command)?;
+        return match run_group(config, name, group, command, |adapter, device| {
+            adapter.invoke(device, command, args)
+        }) {
+            Ok(mut response) => {
+                response["command"] = json!(command);
+                Ok(response)
+            }
+            Err(mut err) => {
+                if let Some(response) = err.response.as_mut() {
+                    response["command"] = json!(command);
+                }
+                Err(err)
+            }
+        };
+    }
+    let device = config.device(name)?;
+    let adapter = require_adapter(device, command)?;
+    let invocation = adapter
+        .invoke(device, command, args)
+        .ok_or_else(|| unsupported(device, command))?;
+    let value = execute(config, &invocation)?;
+    Ok(output::invoke_response(name, device, command, value))
+}
+
+/// invoke のコマンド解釈はプロトコル依存なので、混在プロトコルのグループは
+/// 「同名コマンドが別プロトコルで別の意味に実行される」事故を防ぐため spawn 前に拒否する。
+fn ensure_uniform_protocol(
+    config: &Config,
+    group_name: &str,
+    group: &Group,
+    command: &str,
+) -> Result<(), CasaError> {
+    let protocols: BTreeSet<&str> = group
+        .members
+        .iter()
+        .map(|m| Ok(config.device(m)?.protocol()))
+        .collect::<Result<_, CasaError>>()?;
+    if protocols.len() > 1 {
+        let found: Vec<&str> = protocols.into_iter().collect();
+        return Err(CasaError::new(
+            ErrorKind::ProtocolUnsupported,
+            format!(
+                "invoke \"{command}\" on group \"{group_name}\" requires all members to \
+                 share one protocol (found: {})",
+                found.join(", ")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// `casa describe <name>`
@@ -416,5 +477,67 @@ members = ["light1", "light2"]
         let err = describe(&config, "living").unwrap_err();
         assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
         assert!(err.detail.contains("describe"), "detail: {}", err.detail);
+    }
+
+    const MIXED_GROUP_CONFIG: &str = r#"
+version = 1
+
+[devices.light1]
+protocol = "echonet"
+ip = "192.0.2.11"
+eoj = "0x029101"
+
+[devices.light2]
+protocol = "matter"
+node_id = "1234"
+
+[groups.mixed]
+members = ["light1", "light2"]
+"#;
+
+    #[test]
+    fn invoke_rejects_mixed_protocol_group_before_spawn() {
+        let config = config::parse(MIXED_GROUP_CONFIG).unwrap();
+
+        let err = invoke(&config, "mixed", "blink", &[]).unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert_eq!(err.exit_code(), 14);
+        assert!(err.detail.contains("mixed"), "detail: {}", err.detail);
+        assert!(err.detail.contains("echonet"), "detail: {}", err.detail);
+        assert!(err.detail.contains("matter"), "detail: {}", err.detail);
+        // spawn 前に拒否されるのでメンバー別結果は無い。
+        assert!(err.response.is_none());
+    }
+
+    #[test]
+    fn invoke_group_enters_group_pipeline_and_tags_command() {
+        // enl を存在しないパスに向け、「グループ経路に入り exit 15 が返る」ことを
+        // 実機なしで検証する（power のグループテストと同じ手法）。
+        let text = format!("{GROUP_CONFIG}\n[binaries]\nenl = \"/nonexistent/enl\"\n");
+        let config = config::parse(&text).unwrap();
+
+        let err = invoke(&config, "living", "blink", &[]).unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::GroupPartialFailure);
+        let response = err.response.unwrap();
+        assert_eq!(response["command"], "blink");
+        assert_eq!(response["group"], "living");
+        assert_eq!(response["results"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn invoke_on_protocol_without_adapter_is_protocol_unsupported() {
+        let text = r#"
+version = 1
+[devices.lock]
+protocol = "switchbot"
+device_id = "DUMMY-XX-XX"
+"#;
+        let config = config::parse(text).unwrap();
+
+        let err = invoke(&config, "lock", "press", &[]).unwrap_err();
+
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
     }
 }
