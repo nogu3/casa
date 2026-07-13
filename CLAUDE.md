@@ -154,6 +154,14 @@ device_id = "DUMMY-XX-XX"
   }
   ```
 
+### 動詞の昇格基準と invoke
+
+casa に専用サブコマンドを足すのは「2 プロトコル以上で同じ意味を持つ、または日常高頻度」の
+操作のみ。それ以外の長尾のプロトコル固有操作は `casa invoke <name> <command> [args...]` で
+表現する（名前解決 + アドレスフラグ注入 + 引数素通し。`command` は子 CLI の語彙そのまま）。
+invoke のグループ実行は全メンバー同一プロトコルの場合のみ。casa のグローバルフラグは
+invoke より前に置く。
+
 ### stderr
 - 子 CLI のエラーは構造化ログで stderr に流す。
 - casa 自体のエラーも同じ形式: `{"error": {"kind": "...", "detail": "..."}}`。
@@ -205,7 +213,8 @@ Web ページ / LLM / その他クライアント
 ### `casad` 側が担う責務（casa の責務ではない）
 - 自動化ルール DSL（`rules.toml`）の評価エンジン — **実装済み**:
   - 時刻トリガ（内部スケジューラ）/ イベントトリガ（`enl listen` をループで回して INF 通知に反応）
-  - 発火時は casa を子プロセスとして呼ぶ（`casad run` / `check`）
+  - 発火時は casa を子プロセスとして呼ぶ（`casad run` / `check`）。`then` は `on` / `off` / `invoke`
+    をサポート（`invoke` は `device` / `command` / 任意の `args` を取り、`casa invoke` に委譲する）。
 - ECHONET の INF 通知の購読（`enl listen` 経由。enl 側が「listen は外部ループから回す」設計）— **実装済み**
 - HTTP / WebSocket / MCP サーバ — 未実装（将来）
 - 値のキャッシュとフレッシュネス管理 — 未実装（将来）

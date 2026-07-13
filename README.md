@@ -6,6 +6,9 @@
 casa はプロトコルを直接喋らない。バイト列もソケットも持たず、すべて兄弟 CLI に委譲する。
 設計の全体像は [CLAUDE.md](CLAUDE.md) を参照。
 
+> **破壊変更（v0.6.0）**: `casa color-temp` を削除した。
+> `casa invoke <name> color-temp --kelvin 2700` で代替する（詳細は「動詞の昇格基準」節）。
+
 ## 使い方
 
 ```bash
@@ -26,9 +29,10 @@ casa off living_aircon
 casa on living
 casa off living
 
-# 色温度変更のショートカット（Matter のみ。--kelvin / --mireds は排他）
-casa color-temp living_light --kelvin 2700
-casa color-temp living_light --mireds 370 --transition 30
+# プロトコル固有 CLI のコマンドを名前解決付きで呼び出す（長尾操作の汎用動詞）。
+# <command> 以降は子 CLI にそのまま渡る。casa のフラグ（--config 等）は invoke より前に置く。
+casa invoke living_light color-temp --kelvin 2700
+casa invoke living_light color-temp --mireds 370 --transition 30
 
 # プロパティマップ（introspection）
 casa describe living_aircon
@@ -63,11 +67,22 @@ ECHONET Lite なら EPC（例 `0x80`）、Matter なら `endpoint/cluster/attrib
 }
 ```
 
+## 動詞の昇格基準
+
+casa に専用サブコマンドを足すのは、**2 プロトコル以上で同じ意味を持つ、または日常高頻度の操作**のみ
+（例: `on` / `off` / `get` / `set` / `describe`）。それ以外のプロトコル固有操作は `casa invoke` で表現する。
+invoke の応答は envelope（`timestamp` / `device` / `protocol` / `command`）を casa が保証し、
+`value` は子 CLI の JSON をそのまま格納する。`casa color-temp`（Matter 限定・v0.6.0 で削除）は
+この基準を満たさなかった典型例で、`casa invoke <name> color-temp --kelvin <k> | --mireds <m>`
+に置き換わった。
+
 ### グループ
 
 `devices.toml` の `[groups]` で複数デバイスをひとつの名前にまとめられる。
-`on` / `off` / `color-temp` / `set` はグループ名を透過的に受け付け、全メンバーの
-子 CLI を並列に spawn して同時実行する（プロトコル混在可）。`get` / `describe` は
+`on` / `off` / `set` / `invoke` はグループ名を透過的に受け付け、全メンバーの
+子 CLI を並列に spawn して同時実行する（`on` / `off` / `set` はプロトコル混在可）。
+`invoke` はグループの全メンバーが同一プロトコルの場合のみ実行できる
+（混在グループは spawn 前に exit 14 で拒否）。`get` / `describe` は
 グループ非対応（exit 14）。結果はメンバー別の JSON:
 
 ```json
@@ -109,6 +124,18 @@ stdout には純粋な構造化 JSON のみを出す。`timestamp`（ISO 8601）
 }
 ```
 
+`invoke` の応答は `command` フィールドが加わる以外は同じ envelope:
+
+```json
+{
+  "timestamp": "2026-06-02T12:34:56+09:00",
+  "device": "living_light",
+  "protocol": "matter",
+  "command": "color-temp",
+  "value": {}
+}
+```
+
 診断ログは stderr に構造化（JSON）で出る。レベルは `RUST_LOG` で制御する。
 
 ```bash
@@ -137,7 +164,7 @@ eoj = "0x013001"
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
 
-# 複数デバイスをまとめて操作するグループ（on / off / color-temp / set のみ対応）
+# 複数デバイスをまとめて操作するグループ（on / off / set / invoke のみ対応）
 [groups.living]
 members = ["living_light", "living_aircon"]
 ```
@@ -168,7 +195,7 @@ mat read <node_id> <endpoint> <cluster> <attribute>
 # casa set <name> <property> <value>
 mat write <node_id> <endpoint> <cluster> <attribute> <value>
 mat describe <node_id>
-# casa color-temp <name> --kelvin <k> | --mireds <m> [--transition <t>]
+# casa invoke <name> color-temp --kelvin <k> | --mireds <m> [--transition <t>]
 mat color-temp --node <node_id> [--endpoint <ep>] --kelvin <k> | --mireds <m> [--transition <t>]
 ```
 
@@ -202,11 +229,14 @@ endpoint = 2              # on/off が対象とするエンドポイント
 （ノードの endpoint / cluster introspection）、SwitchBot は未対応
 （`casa describe` は exit 14、`casa list --describe` では `properties: null`）。
 
-`color-temp` は Matter のみ対応: 色温度変更は属性 write ではなく ColorControl コマンドの
-invoke なので、`mat color-temp` に委譲する（エンドポイントは設定の `endpoint`）。
-`--kelvin` / `--mireds` はどちらか一方が必須（排他は clap が検証、exit 2）。
-範囲外の値は mat / デバイス側が clamp し、casa は事前検証しない。
-ECHONET Lite / SwitchBot は未対応（exit 14 `protocol_unsupported`）。
+色温度変更は casa に専用サブコマンドを持たない（v0.6.0 で `casa color-temp` を削除、
+「動詞の昇格基準」節を参照）。`casa invoke <name> color-temp --kelvin <k> | --mireds <m>
+[--transition <t>]` で呼ぶと、Matter では `mat color-temp --node <node_id> [--endpoint <ep>]`
+にそのまま委譲される。`--kelvin` / `--mireds` の排他検証や範囲外値の clamp は casa ではなく
+mat / デバイス側の責務（casa は引数を解釈せず素通しする）。SwitchBot はアダプタ未実装のため
+`invoke` 自体が exit 14 `protocol_unsupported`。ECHONET Lite にはアダプタはあるが `enl` に
+`color-temp` 相当のコマンドは無いため、渡すと enl 自身の「未知サブコマンド」エラーが
+子 CLI の exit code のまま伝播する。
 
 バイナリの解決は `PATH` が既定。以下で上書きできる（環境変数が優先）:
 
