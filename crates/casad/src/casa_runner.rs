@@ -6,7 +6,7 @@
 //! - casa が落ちても casad のデバッグができる（実行時の影響範囲が閉じる）。
 //! - 将来 casad を別言語で書き直すときも、保つべきは casa の CLI 境界だけで済む。
 //!
-//! アクション → casa 引数列の写像は [`crate::action::Action::casa_args`] が持つ。
+//! アクション → casa 引数列の写像は [`crate::rules::Then::casa_args`] が持つ。
 
 use std::process::Command;
 
