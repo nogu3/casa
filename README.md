@@ -175,7 +175,7 @@ casa はプロトコル固有 CLI が `PATH` 上に存在することを前提�
 
 | プロトコル | CLI | 想定最低バージョン | 状態 |
 |---|---|---|---|
-| ECHONET Lite | `enl` | 0.1.0（`get` / `set` が stdout に JSON を出すこと） | 対応済み |
+| ECHONET Lite | `enl` | casa: 0.1.0（`get` / `set` が stdout に JSON を出すこと）。casad: 1.5.0（`listen` があり、常駐 listen と one-shot の 3610 共存モデルを持つこと） | 対応済み |
 | Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe` が stdout に JSON を出すこと | 対応済み |
 | SwitchBot | `switchbot` | — | 未対応（Phase 4） |
 
