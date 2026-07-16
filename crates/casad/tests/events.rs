@@ -51,6 +51,41 @@ fn listen_once_fires_event_rule_via_casa() {
 }
 
 #[test]
+fn listen_once_warns_when_casa_exits_nonzero() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(dir.path(), EVENT_RULES);
+
+    // casa 代役が exit 3（enl のタイムアウト相当）で失敗するケース。
+    // エンジンは止まらない（exit 0）が、失敗は warn として stderr に残ること。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_ENL_BIN", &fixture("enl_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("CASA_FAKE_EXIT", "3"),
+            ("RUST_LOG", "warn"),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("rule action exited nonzero"),
+        "stderr: {stderr}"
+    );
+    // どのルールが何の exit code で失敗したか特定できること。
+    assert!(stderr.contains("エアコン電源ONで点灯"), "stderr: {stderr}");
+    assert!(stderr.contains("\"code\":3"), "stderr: {stderr}");
+}
+
+#[test]
 fn listen_once_does_not_fire_on_value_mismatch() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), DUMMY_CONFIG);

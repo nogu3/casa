@@ -138,12 +138,17 @@ pub fn drain_events_once(
     Ok(fire_due_events(file, config, &events, config_path))
 }
 
-/// 与えられたルール群をすべて発火する。失敗はループを止めず warn ログに残す。発火数を返す。
+/// 与えられたルール群をすべて発火する。失敗はループを止めず warn ログに残す。
+/// 成功（casa が exit 0）した件数を返す。非ゼロ exit は casa 側の失敗
+/// （子 CLI タイムアウト等。コードは casa の規約参照）なので、spawn 失敗と同様に warn する。
 fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
     let mut fired = 0;
     for rule in rules {
         match fire(rule, config_path) {
-            Ok(_) => fired += 1,
+            Ok(0) => fired += 1,
+            Ok(code) => {
+                tracing::warn!(rule = %rule.name, code, "rule action exited nonzero");
+            }
             Err(e) => tracing::warn!(rule = %rule.name, error = %e, "rule action failed"),
         }
     }

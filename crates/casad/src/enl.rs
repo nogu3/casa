@@ -77,5 +77,11 @@ pub fn listen_once(bin: &str) -> Result<Vec<Event>, CasaError> {
             format!("enl listen stdout is not valid JSON: {e}"),
         )
     })?;
+    // ルールに一致しない通知も追えるよう、受信した全イベントを debug で残す。
+    for ev in &parsed.events {
+        for prop in &ev.properties {
+            tracing::debug!(ip = %ev.ip, seoj = %ev.seoj, epc = %prop.epc, edt = %prop.edt_hex, "event received");
+        }
+    }
     Ok(parsed.events)
 }
