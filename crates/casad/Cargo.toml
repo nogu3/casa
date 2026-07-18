@@ -1,6 +1,6 @@
 [package]
 name = "casad"
-description = "casa 上の常駐レイヤ。DSL ルールエンジン（時刻 / イベントトリガ → アクション）を担う。casa-core を link し、実機アクションは casa を子プロセスとして起動する。"
+description = "Resident layer on top of casa. Provides a DSL rule engine (time / event triggers → actions). Links casa-core and runs casa as a child process for real-device actions."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

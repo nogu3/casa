@@ -1,67 +1,67 @@
 # CLAUDE.md
 
-`casa` — スマートホーム横断クライアント。プロトコル固有 CLI（`enl` 等）をサブプロセスで呼び、名前マッピングと統一 UX を提供する。
+`casa` — a cross-protocol smart-home client. It calls protocol-specific CLIs (`enl`, etc.) as subprocesses and provides name mapping and a unified UX.
 
-> 名前: **`casa`** 確定。
-> リポジトリ: **パブリック / 独立リポジトリ**。
-> 設定ファイル: **別リポジトリで管理**（このリポジトリには含めない）。
-
----
-
-## プロジェクトの目的と立ち位置
-
-スマートホームの操作対象は ECHONET Lite / SwitchBot / Matter と複数プロトコルにまたがる。これらを**ひとつのバイナリに統合せず**、プロトコルごとの薄い CLI（`enl` 等）で実装し、**横断 UX をその上に薄く乗せる**のが基本構想。casa はその横断レイヤを担う。
-
-### casa の責務
-- 人間に優しい名前 → (プロトコル, アドレス, オブジェクト) の解決
-- 設定ファイルの読み込み・バリデーション
-- プロトコル固有 CLI への一貫したラッパ UX
-
-### casa の非責務
-- プロトコルの実装。バイト列を組まない、UDP を投げない、Matter スタックを抱えない。**すべて子プロセスに委譲する。**
-- スケジューリング・常駐・状態保持。
-- 設定ファイル自体の所有。設定は利用者が別管理する（後述）。
+> Name: **`casa`** — decided.
+> Repository: **public / standalone repository**.
+> Config file: **managed in a separate repository** (not included in this repository).
 
 ---
 
-## 兄弟 CLI 命名規則
+## Project purpose and positioning
 
-casa から呼ばれる前提のプロトコル固有 CLI は、以下の方針で揃える:
+Smart-home targets span multiple protocols — ECHONET Lite / SwitchBot / Matter. The core idea is **not to merge these into a single binary**, but to implement each protocol as a thin CLI (`enl`, etc.) and to **layer a thin cross-cutting UX on top**. casa is that cross-cutting layer.
 
-- **公式 CLI が存在するプロトコルは公式名をそのまま採用する**（命名規則より公式に従う）。
-- **自作 CLI はプロトコル頭字語の短い名前**で揃える（`enl` 等）。
+### casa's responsibilities
+- Resolve human-friendly names → (protocol, address, object)
+- Load and validate the config file
+- Provide a consistent wrapper UX over protocol-specific CLIs
 
-| プロトコル | CLI 名 | 状態 |
+### Not casa's responsibilities
+- Implementing protocols. It does not assemble byte sequences, does not send UDP, and does not carry a Matter stack. **Everything is delegated to child processes.**
+- Scheduling, running long-running / resident, holding state.
+- Owning the config file itself. The config is managed separately by the user (see below).
+
+---
+
+## Sibling CLI naming convention
+
+Protocol-specific CLIs that are meant to be called by casa follow this policy:
+
+- **For protocols that have an official CLI, adopt the official name as-is** (defer to the official name over the naming convention).
+- **Self-authored CLIs use a short name based on the protocol's acronym** (`enl`, etc.).
+
+| Protocol | CLI name | Status |
 |---|---|---|
-| ECHONET Lite | `enl` | 自作・開発中（独立リポジトリ） |
-| SwitchBot | `switchbot` | 公式 CLI を利用（`@switchbot/openapi-cli`、OpenAPI 経由）。将来自作に切り替える可能性あり。 |
-| Matter | `mat` | 自作 CLI（chip-tool ラッパ、独立リポジトリ）。casa アダプタ対応済み。`mtr` は既存 network diagnostic と衝突するため使わない |
+| ECHONET Lite | `enl` | Self-authored, in development (standalone repository) |
+| SwitchBot | `switchbot` | Uses the official CLI (`@switchbot/openapi-cli`, via OpenAPI). May switch to a self-authored CLI in the future. |
+| Matter | `mat` | Self-authored CLI (chip-tool wrapper, standalone repository). casa adapter supported. `mtr` is not used because it collides with the existing network diagnostic tool. |
 
-casa は **これらが `PATH` 上に存在すること**を前提とする。
-
----
-
-## 絶対に守る設計原則
-
-1. **プロトコルを直接喋らない**
-   バイト列・ソケット・プロトコルスタックを casa に持ち込まない。持ち込みたくなったら、それは新しい兄弟 CLI を作るべきサイン。
-2. **stdout は純粋な構造化 JSON のみ**
-   子 CLI の出力をパースし、casa のスキーマに正規化して再出力する。人間装飾は混ぜない。
-3. **診断は stderr に構造化ログ**（`tracing`）
-   子 CLI の stderr も呑み込まず、少なくとも debug レベルで残す。
-4. **設定ファイル以外の状態を持たない**
-   キャッシュ DB なし、デーモンなし、内部スケジューラなし。
+casa assumes **these exist on `PATH`**.
 
 ---
 
-## 設定ファイル
+## Design principles that must always be upheld
 
-### 場所と所有
-- 既定パス: `$XDG_CONFIG_HOME/casa/devices.toml`（既定 `~/.config/casa/devices.toml`）。
-- パスは `--config <path>` および環境変数 `CASA_CONFIG` で上書き可能。
-- **設定ファイル自体は casa リポジトリで管理しない**。利用者が別リポジトリ（プライベート想定）で持ち、`~/.config/casa/` に配置 or シンボリックリンクする運用とする。
+1. **Do not speak protocols directly**
+   Do not bring byte sequences, sockets, or protocol stacks into casa. If you feel the urge to, that is a sign you should build a new sibling CLI.
+2. **stdout is pure structured JSON only**
+   Parse the child CLI's output, normalize it into casa's schema, and re-emit it. Do not mix in human-oriented decoration.
+3. **Diagnostics go to stderr as structured logs** (`tracing`)
+   Do not swallow the child CLI's stderr either; keep it at least at debug level.
+4. **Hold no state other than the config file**
+   No cache DB, no daemon, no internal scheduler.
 
-### フォーマット: TOML
+---
+
+## Config file
+
+### Location and ownership
+- Default path: `$XDG_CONFIG_HOME/casa/devices.toml` (default `~/.config/casa/devices.toml`).
+- The path can be overridden with `--config <path>` and the environment variable `CASA_CONFIG`.
+- **The config file itself is not managed in the casa repository.** The user keeps it in a separate repository (assumed private) and places it in `~/.config/casa/` or symlinks it there.
+
+### Format: TOML
 
 ```toml
 version = 1
@@ -81,70 +81,70 @@ protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
 ```
 
-- 名前（キー）は snake_case 推奨。
-- `protocol` で casa が呼ぶ子 CLI を決める。
-- プロトコル固有フィールドは子 CLI の引数にそのまま渡す。
+- Names (keys) are recommended to be snake_case.
+- `protocol` determines which child CLI casa calls.
+- Protocol-specific fields are passed through to the child CLI's arguments as-is.
 
-### リポジトリ内のサンプル・テスト
-- このリポジトリに含めるサンプルは **必ずダミー値のみ**（RFC 5737 `192.0.2.0/24` 等）。
-- 実 IP・実 MAC・実機 ID をリポジトリに含めない（パブリックのため）。
+### Samples and tests in the repository
+- Samples included in this repository **must use dummy values only** (RFC 5737 `192.0.2.0/24`, etc.).
+- Do not include real IPs, real MACs, or real device IDs in the repository (it is public).
 
-### マイグレーション
-- `version` フィールドで判別。
-- **自動マイグレーションはしない**（明示コマンドで実行）。設定ファイルは利用者の所有物なので静かに書き換えない。
+### Migration
+- Distinguished by the `version` field.
+- **No automatic migration** (run it via an explicit command). The config file is the user's property, so do not silently rewrite it.
 
 ---
 
-## 技術スタック
+## Tech stack
 
-| 領域 | 採用 | 備考 |
+| Area | Choice | Notes |
 |---|---|---|
-| 言語 | Rust | enl と同一 |
+| Language | Rust | Same as enl |
 | CLI | `clap` (derive) | |
-| サブプロセス | `std::process::Command` | 依存ゼロ |
-| 設定パース | `toml` crate | |
-| JSON | `serde` + `serde_json` | 子 CLI の出力パース |
-| ログ | `tracing` + `tracing-subscriber` | stderr 出力 |
+| Subprocess | `std::process::Command` | Zero dependencies |
+| Config parsing | `toml` crate | |
+| JSON | `serde` + `serde_json` | Parse child CLI output |
+| Logging | `tracing` + `tracing-subscriber` | stderr output |
 
-依存は最小限。casa の核は外部プロセス起動と JSON パースなので過度な手書きはしない。
+Keep dependencies minimal. casa's core is spawning external processes and parsing JSON, so avoid excessive hand-rolling.
 
 ---
 
-## アーキテクチャ
+## Architecture
 
 ```
-ユーザー / cron / n8n / その他オーケストレータ
+User / cron / n8n / other orchestrator
         │
         ▼
-      casa  ◄── devices.toml (別管理)
+      casa  ◄── devices.toml (managed separately)
         │
         │  Command::new("enl") / "switchbot" / "mat"
         ▼
-   プロトコル固有 CLI (stdout = JSON)
+   protocol-specific CLI (stdout = JSON)
         │
         ▼
-   実機（UDP / BLE / IP / クラウド API）
+   real device (UDP / BLE / IP / cloud API)
 ```
 
-### 子 CLI バイナリの解決
-- 既定: `PATH` から `enl` / `switchbot` / `mat` を解決。
-- オーバーライド: 環境変数（`CASA_ENL_BIN` 等）または設定ファイルでフルパス指定可。
-- 起動失敗（バイナリ無し／実行不可）は専用 exit code で即判別できること。
+### Resolving the child CLI binary
+- Default: resolve `enl` / `switchbot` / `mat` from `PATH`.
+- Override: a full path can be specified via an environment variable (`CASA_ENL_BIN`, etc.) or the config file.
+- Startup failure (binary missing / not executable) must be immediately distinguishable via a dedicated exit code.
 
-### 子 CLI とのバージョン互換
-- 結合は **stdout JSON スキーマのみ**。crate 依存しない＝SemVer 追従不要。
-- 子 CLI のスキーマが破壊変更されたら casa 側で吸収する。
-- README に **想定する子 CLI 最低バージョン**を書く。
+### Version compatibility with the child CLI
+- The coupling is **the stdout JSON schema only**. No crate dependency = no need to track SemVer.
+- If a child CLI's schema makes a breaking change, absorb it on the casa side.
+- Document the **minimum assumed child CLI version** in the README.
 
 ---
 
-## 規約
+## Conventions
 
 ### stdout
-- 成功時は結果データを JSON で stdout に出す。
-- 子 CLI 出力をそのまま流さず、**casa のスキーマで再構成**する（プロトコル抽象化の責務）。
-- **`timestamp` フィールドを必須**とする（ISO 8601、casa が応答を組み立てた時刻）。上層（常駐プロセス・キャッシュ）がフレッシュネス判定に使える。
-- 例:
+- On success, emit the result data as JSON to stdout.
+- Do not pass the child CLI's output through verbatim; **reconstruct it in casa's schema** (the protocol-abstraction responsibility).
+- The **`timestamp` field is required** (ISO 8601, the time casa assembled the response). Upper layers (resident processes, caches) can use it for freshness determination.
+- Example:
   ```json
   {
     "timestamp": "2026-06-02T12:34:56+09:00",
@@ -154,230 +154,225 @@ device_id = "DUMMY-XX-XX"
   }
   ```
 
-### 動詞の昇格基準と invoke
+### Verb promotion criteria and invoke
 
-casa に専用サブコマンドを足すのは「2 プロトコル以上で同じ意味を持つ、または日常高頻度」の
-操作のみ。それ以外の長尾のプロトコル固有操作は `casa invoke <name> <command> [args...]` で
-表現する（名前解決 + アドレスフラグ注入 + 引数素通し。`command` は子 CLI の語彙そのまま）。
-invoke のグループ実行は全メンバー同一プロトコルの場合のみ。casa のグローバルフラグは
-invoke より前に置く。
+A dedicated subcommand is added to casa only for operations that "have the same meaning across two or more protocols, or are used with high daily frequency." All other long-tail, protocol-specific operations are expressed via `casa invoke <name> <command> [args...]` (name resolution + address-flag injection + argument pass-through; `command` uses the child CLI's vocabulary directly). Group execution of invoke is allowed only when all members share the same protocol. casa's global flags go before invoke.
 
 ### stderr
-- 子 CLI のエラーは構造化ログで stderr に流す。
-- casa 自体のエラーも同じ形式: `{"error": {"kind": "...", "detail": "..."}}`。
-- `kind` 例: `config_missing` / `config_parse` / `name_not_found` / `child_not_found` / `child_failed`。
+- Child CLI errors are sent to stderr as structured logs.
+- casa's own errors use the same shape: `{"error": {"kind": "...", "detail": "..."}}`.
+- `kind` examples: `config_missing` / `config_parse` / `name_not_found` / `child_not_found` / `child_failed`.
 
 ### exit code
-| code | 意味 |
+| code | meaning |
 |---|---|
-| 0 | 成功 |
-| 2 | CLI 引数エラー（clap 既定） |
-| 10 | 設定ファイル無し / パース失敗 |
-| 11 | 名前が設定ファイルに無い |
-| 12 | 子 CLI バイナリが見つからない / 実行不可 |
-| 13 | 子 CLI の stdout が JSON としてパースできない |
-| 14 | そのプロトコルでは未対応の操作 |
-| 15 | グループ実行でメンバーの一部（または全部）が失敗 |
-| その他 | **子 CLI の exit code をそのまま伝播** |
+| 0 | Success |
+| 2 | CLI argument error (clap default) |
+| 10 | Config file missing / parse failure |
+| 11 | Name not present in the config file |
+| 12 | Child CLI binary not found / not executable |
+| 13 | Child CLI's stdout cannot be parsed as JSON |
+| 14 | Operation not supported for that protocol |
+| 15 | In group execution, some (or all) members failed |
+| other | **Propagate the child CLI's exit code as-is** |
 
-子 CLI 由来のエラーは元のコードを保つことで、呼び出し側が「タイムアウトかリジェクトか」等を区別できる。
+By preserving the original code for errors originating from the child CLI, the caller can distinguish "timeout vs. rejection" and so on.
 
 ---
 
-## 常駐・状態が必要なユースケースは casa の外に置く
+## Put use cases that need long-running / stateful behavior outside casa
 
-将来、自作 Web ページや LLM からの呼び出し、状態変化の購読、キャッシュなどが要件として出てくる。これらは **casa（bin）に足さない**。casa の上にもう一層 `casad` を置いて吸収する。
+In the future, requirements such as a self-built web page, calls from an LLM, subscription to state changes, and caching will arise. These are **not added to casa (the bin)**. Place another layer, `casad`, on top of casa to absorb them.
 
-> **重要（実態）**: `casad` は**同一ワークスペースの別 crate（`crates/casad`）・別バイナリ**として実装済み。守るべき境界は「リポジトリ」ではなく「**プロセス／状態**」—— casa(bin) はステートレスのまま、casad が常駐・状態・スケジューラを持つ。ssh と sshd が同じ OpenSSH リポジトリの別バイナリであるのと同じ関係。設定ロード・名前解決などの純ロジックは `casa-core`(lib) を両者で共有し、実機アクションは casad が casa を子プロセスとして呼ぶ（ハイブリッド）。
+> **Important (actual state)**: `casad` is already implemented as a **separate crate in the same workspace (`crates/casad`), a separate binary**. The boundary to uphold is not "repository" but "**process / state**" —— casa(bin) stays stateless, while casad holds the long-running behavior, state, and scheduler. It is the same relationship as ssh and sshd being separate binaries in the same OpenSSH repository. Pure logic such as config loading and name resolution is shared by both via `casa-core`(lib), and real-device actions are performed by casad calling casa as a child process (hybrid).
 
 ```
-Web ページ / LLM / その他クライアント
+Web page / LLM / other client
        │
        ▼
-   casad（常駐・状態を持つ。crates/casad・別プロセス）
+   casad (long-running, holds state. crates/casad, separate process)
        │
-       │ プロセス起動（casa を CLI として呼ぶ）
+       │ spawns a process (calls casa as a CLI)
        ▼
-   casa（ステートレスを維持。crates/casa）
+   casa (stays stateless. crates/casa)
        │
        ▼
    enl / switchbot / mat
 ```
 
-### この分離を守る理由
-- casa は cron からも n8n からも `casad` からも等価に叩ける。常駐が落ちていてもデバッグできる。
-- `casad` を後から別言語（TypeScript 等）で書ける。LLM 系は TS エコシステムが厚いため現実的な選択肢になる。
-- `casad` を捨てて作り直せる。casa が無事なので影響範囲が閉じる。
-- 「キャッシュを持つ主体は常駐するもの」という原則を守れる。casa にキャッシュを足すと状態管理が連鎖し、Home Assistant 化の第一歩になる。
+### Reasons to uphold this separation
+- casa can be invoked equivalently from cron, from n8n, and from `casad`. Even if the resident process is down, you can still debug.
+- `casad` can later be written in another language (TypeScript, etc.). For LLM work, the TS ecosystem is rich, making this a realistic option.
+- `casad` can be thrown away and rebuilt. Because casa is intact, the blast radius stays contained.
+- It upholds the principle that "whatever holds a cache is something that runs long-running." Adding a cache to casa would cascade into state management — the first step toward becoming Home Assistant.
 
-### `casad` 側が担う責務（casa の責務ではない）
-- 自動化ルール DSL（`rules.toml`）の評価エンジン — **実装済み**:
-  - 時刻トリガ（内部スケジューラ）/ イベントトリガ（`enl listen` をループで回して INF 通知に反応）
-  - 発火はデバイス別ワーカーへ非同期投入（同一デバイス FIFO・異デバイス並列）。
-    アクション実行中も `enl listen` は止まらない。`--once` / `--listen-once` は同期実行。
-  - 発火時は casa を子プロセスとして呼ぶ（`casad run` / `check`）。`then` は `on` / `off` / `invoke`
-    をサポート（`invoke` は `device` / `command` / 任意の `args` を取り、`casa invoke` に委譲する）。
-- ECHONET の INF 通知の購読（`enl listen` 経由。enl 側が「listen は外部ループから回す」設計）— **実装済み**
-- HTTP / WebSocket / MCP サーバ — 未実装（将来）
-- 値のキャッシュとフレッシュネス管理 — 未実装（将来）
-- LLM からの Function Calling 受け口 — 未実装（将来。rules.toml は LLM / UI 生成を想定）
-- 認証・認可・レート制限 — 未実装（将来）
+### Responsibilities the `casad` side takes on (not casa's responsibilities)
+- Evaluation engine for the automation rule DSL (`rules.toml`) — **implemented**:
+  - Time triggers (internal scheduler) / event triggers (run `enl listen` in a loop and react to INF notifications)
+  - Firing is dispatched asynchronously to per-device workers (FIFO per device, parallel across devices).
+    `enl listen` does not stop even while an action is running. `--once` / `--listen-once` run synchronously.
+  - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`
+    (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`).
+- Subscription to ECHONET INF notifications (via `enl listen`; the enl side is designed so "listen is driven from an external loop") — **implemented**
+- HTTP / WebSocket / MCP server — not implemented (future)
+- Value caching and freshness management — not implemented (future)
+- Endpoint for Function Calling from an LLM — not implemented (future; rules.toml is assumed to be LLM / UI generated)
+- Authentication / authorization / rate limiting — not implemented (future)
 
-### casa 側が `casad` のために守るべきこと（既に満たしている）
-- `--config <path>` で設定ファイルパスを渡せる（毎回 `$XDG_CONFIG_HOME` を読まない）。
-- stdout JSON に `timestamp` を必ず含める（キャッシュ判断に使える）。
-- exit code を子 CLI から伝播する（上層がリトライ判断できる）。
+### What the casa side must uphold for `casad` (already satisfied)
+- The config file path can be passed via `--config <path>` (do not read `$XDG_CONFIG_HOME` every time).
+- Always include `timestamp` in the stdout JSON (usable for cache decisions).
+- Propagate the exit code from the child CLI (upper layers can make retry decisions).
 
-`casad` は本ワークスペースの `crates/casad` に実装する（別リポジトリにはしない）。casa(bin) の
-ステートレス原則を壊さない限り、casad の機能拡張はこのリポジトリ内で進めてよい。
-
----
-
-## ロードマップ
-
-Claude Code が casa を実装するときのリファレンス。フェーズは**順番に**進める。前フェーズが完全に終わる（全テストが通る・受け入れ基準を満たす）まで次フェーズに進まない。
-
-各フェーズは以下を定義する:
-- **ゴール**: そのフェーズで何が出来上がるか。
-- **スコープ**: このフェーズでやること。
-- **スコープ外**: 小さく見えてもこのフェーズではやらないこと。
-- **完了条件**: 明確な受け入れ基準。
+`casad` is implemented in this workspace at `crates/casad` (it is not made a separate repository). As long as casa(bin)'s stateless principle is not broken, feature expansion of casad may proceed within this repository.
 
 ---
 
-### Phase 0 — プロジェクト雛形
+## Roadmap
 
-**ゴール**: 設定ファイルを読んでデバイス一覧を出せるだけの Rust プロジェクトをビルド可能にする。子 CLI はまだ呼ばない。
+A reference for when Claude Code implements casa. Proceed through the phases **in order**. Do not move to the next phase until the previous phase is fully done (all tests pass, acceptance criteria met).
 
-**スコープ**:
-- `clap`(derive)・`serde`・`serde_json`・`toml`・`tracing`・`tracing-subscriber` を入れた Cargo プロジェクト。
-- サブコマンド1つ: `casa list` だけの CLI 雛形。
-- 設定ローダ: 既定パス／`--config`／`CASA_CONFIG` から TOML を読む。
-- 設定のバリデーション（プロトコルごとの必須フィールド、未知プロトコルはエラー）。
-- `casa list` は全デバイスを JSON で stdout に出す。
-- `tracing` のログは stderr へ。レベルは `RUST_LOG` で制御。
-- exit code `0` / `2` / `10` / `11` が規約通り動く。
-
-**スコープ外**:
-- 子 CLI の呼び出し。
-- `get` / `set` / `describe` / `on` / `off`。
-
-**完了条件**:
-- `cargo build`・`cargo test`・`cargo clippy -- -D warnings` がすべて通る。
-- 設定パースのユニットテストを揃える: 正常系、ファイル無し、TOML 不正、未知プロトコル、必須フィールド欠落。
-- ダミー設定（`192.0.2.0/24`）で `casa list` が正しい JSON を出す。
-- 設定ファイル無しで起動すると exit code `10` で stderr に構造化エラー。
-
-**enl への依存なし**。enl が未完成でもこのフェーズは完成・出荷できる。
+Each phase defines the following:
+- **Goal**: what gets built in that phase.
+- **Scope**: what to do in this phase.
+- **Out of scope**: things not to do in this phase, however small they seem.
+- **Acceptance criteria**: clear acceptance standards.
 
 ---
 
-### Phase 1 — enl 連携（get / set）
+### Phase 0 — Project skeleton
 
-**ゴール**: casa が名前で ECHONET Lite 機器を読み書きできる。実体は `enl` をサブプロセス呼び出し。
+**Goal**: Make a Rust project buildable that can only read the config file and list devices. It does not call child CLIs yet.
 
-**前提**: `enl get` と `enl set` が stdout に安定した JSON を出して出荷されていること。exit code も enl 側 CLAUDE.md の規約通り。
+**Scope**:
+- A Cargo project with `clap`(derive), `serde`, `serde_json`, `toml`, `tracing`, `tracing-subscriber`.
+- A single subcommand: a CLI skeleton with just `casa list`.
+- Config loader: read TOML from the default path / `--config` / `CASA_CONFIG`.
+- Config validation (required fields per protocol; unknown protocols are an error).
+- `casa list` emits all devices as JSON to stdout.
+- `tracing` logs go to stderr. The level is controlled by `RUST_LOG`.
+- exit codes `0` / `2` / `10` / `11` work per the conventions.
 
-**スコープ**:
-- 「子ランナー」モジュール: バイナリ名と引数を受け取って起動し、stdout/stderr を捕捉、JSON を返すかエラーを返す。
-- 子バイナリは `PATH` 解決。`CASA_ENL_BIN` または設定ファイルでフルパス上書き可。
+**Out of scope**:
+- Calling child CLIs.
+- `get` / `set` / `describe` / `on` / `off`.
+
+**Acceptance criteria**:
+- `cargo build`, `cargo test`, `cargo clippy -- -D warnings` all pass.
+- Unit tests for config parsing are in place: happy path, file missing, invalid TOML, unknown protocol, missing required field.
+- With a dummy config (`192.0.2.0/24`), `casa list` emits correct JSON.
+- Starting with no config file exits with exit code `10` and a structured error on stderr.
+
+**No dependency on enl.** This phase can be completed and shipped even if enl is unfinished.
+
+---
+
+### Phase 1 — enl integration (get / set)
+
+**Goal**: casa can read and write ECHONET Lite devices by name. The actual work is a subprocess call to `enl`.
+
+**Prerequisite**: `enl get` and `enl set` have shipped, emitting stable JSON to stdout. Exit codes also follow the conventions in enl's CLAUDE.md.
+
+**Scope**:
+- A "child runner" module: takes a binary name and arguments, launches it, captures stdout/stderr, and returns either JSON or an error.
+- The child binary is resolved from `PATH`. The full path can be overridden via `CASA_ENL_BIN` or the config file.
 - `casa get <name> <epc>`:
-  - `<name>` を設定から (IP, EOJ) に解決。
-  - `enl get --ip <ip> --eoj <eoj> --epc <epc>`（最終的なフラグ名は enl の出荷に合わせる）を呼ぶ。
-  - enl の JSON を casa スキーマに再整形して stdout に出す。
-- `casa set <name> <epc> <value>`: 同様。
-- exit code 伝播: enl が `3`（タイムアウト）や `4`（機器リジェクト）で終了したら casa も同じコードで終了。casa 自身のエラーは `10` / `11` / `12`。
-- 子 stderr は呑まず debug レベルで casa の stderr へ転送。
+  - Resolve `<name>` to (IP, EOJ) from the config.
+  - Call `enl get --ip <ip> --eoj <eoj> --epc <epc>` (final flag names to match enl's shipped release).
+  - Reshape enl's JSON into casa's schema and emit it to stdout.
+- `casa set <name> <epc> <value>`: the same.
+- exit code propagation: if enl exits with `3` (timeout) or `4` (device rejection), casa exits with the same code. casa's own errors are `10` / `11` / `12`.
+- Do not swallow the child's stderr; forward it to casa's stderr at debug level.
 
-**スコープ外**:
-- SwitchBot・Matter・その他プロトコル。
-- introspection（`describe`）。
-- ON/OFF ショートカット。
+**Out of scope**:
+- SwitchBot, Matter, and other protocols.
+- introspection (`describe`).
+- ON/OFF shortcuts.
 
-**完了条件**:
-- `cargo test` が**ダミー `enl` バイナリ**（固定 JSON を吐くスクリプト or テストヘルパ）を使った統合テストを含む。CI で実 enl は不要。
-- 実機相手の手動 E2E テストが README に記載されている（CI には載せない）。
-- stderr エラーの `kind` 値が安定していて文書化されている。
-
----
-
-### Phase 2 — Introspection とショートカット
-
-**ゴール**: casa を日常使いで気持ちよくする。
-
-**前提**: `enl describe`（プロパティマップ introspection）が出荷済み。
-
-**スコープ**:
-- `casa describe <name>`: 子 CLI の introspection を呼ぶ（enl ならプロパティマップ）。
-- `casa on <name>` / `casa off <name>`: 高頻度操作のショートカット。ECHONET Lite では EPC `0x80` に `0x30`/`0x31` をマップする。マッピング表はプロトコルごとに casa 内ハードコード（プロトコルロジックではなく UX なので OK）。
-- `casa list` に、その session 中の最新プロパティマップを任意でインクルードできるよう拡張（**永続キャッシュは追加しない**）。
-
-**スコープ外**:
-- 永続キャッシュや DB。
-- SwitchBot/Matter 対応。
-
-**完了条件**:
-- `cargo test` が ECHONET Lite の ON/OFF マッピングをカバー。
-- README に各プロトコルの `on`/`off` 対応状況とマッピング先を記載。
+**Acceptance criteria**:
+- `cargo test` includes an integration test using a **dummy `enl` binary** (a script or test helper that emits fixed JSON). Real enl is not needed in CI.
+- Manual E2E tests against real devices are documented in the README (not run in CI).
+- The `kind` values for stderr errors are stable and documented.
 
 ---
 
-### Phase 3 — マルチプロトコル化（リファクタのみ）
+### Phase 2 — Introspection and shortcuts
 
-**ゴール**: 2 つ目のプロトコルを書き直しなしで追加できる状態にする。新プロトコルはまだ足さない。
+**Goal**: Make casa pleasant for daily use.
 
-**スコープ**:
-- 子ランナーとサブコマンドハンドラをリファクタし、新プロトコル追加が以下だけで済むようにする:
-  1. プロトコル enum に variant 追加。
-  2. そのプロトコルの CLI 引数を組むアダプタを追加。
-  3. アダプタのテストを追加。
-- 設定の `protocol` フィールドが dispatch の唯一の真実とする。
+**Prerequisite**: `enl describe` (property map introspection) has shipped.
 
-**スコープ外**:
-- 実際に SwitchBot や Matter を足すこと（公式 `switchbot` / 自作 `mat` 等の準備ができてから）。
+**Scope**:
+- `casa describe <name>`: call the child CLI's introspection (a property map for enl).
+- `casa on <name>` / `casa off <name>`: shortcuts for high-frequency operations. For ECHONET Lite, map EPC `0x80` to `0x30`/`0x31`. The mapping table is hardcoded inside casa per protocol (this is UX, not protocol logic, so it is OK).
+- Extend `casa list` so it can optionally include the latest property map obtained during that session (**do not add a persistent cache**).
 
-**完了条件**:
-- アダプタ trait か関数テーブルが明確に存在する。
-- テストで仮想アダプタを足してもサブコマンドハンドラを一切触らずに済む。
+**Out of scope**:
+- A persistent cache or DB.
+- SwitchBot/Matter support.
 
----
-
-### Phase 4 以降 — 実プロトコル追加
-
-各追加は Phase 3 形式のアダプタ 1 個分。サブコマンドや設定スキーマは（`protocol` の新値以外）変更しない。
-
-- **SwitchBot**: 公式 `switchbot` CLI（`@switchbot/openapi-cli`）を呼ぶアダプタを書く。**自作 CLI は書かない**。認証は公式 CLI 側が完結させるので casa は credentials を扱わない（環境変数や設定ファイルから何かを渡す必要も基本的にない）。OpenAPI 経由＝クラウド往復のためレイテンシ特性が enl と異なる点だけ呼び出し側に伝える。
-  - 将来、BLE 直接制御やローカル完結が必要になった場合は自作 CLI（`sbl` 等）に切り替える可能性がある。その場合も casa 側は `protocol = "switchbot"` のディスパッチ先バイナリを変えるだけで済むよう、アダプタは公式 CLI の存在を前提に閉じ込めること。
-- **Matter**: **対応済み**。自作 `mat`（chip-tool ラッパ）を呼ぶアダプタを追加。Matter は (node_id, endpoint, cluster, attribute) でアドレスするため、casa の単一セレクタ `<epc>` を `endpoint/cluster/attribute` として解釈し `mat read`/`write` に割り当てる。`on`/`off` は OnOff コマンドの invoke（`mat on`/`off`）。設定は `node_id` 必須・`endpoint` 任意。Phase 3 のアダプタ trait に variant 1 個追加のみでサブコマンドハンドラは無変更。
+**Acceptance criteria**:
+- `cargo test` covers the ECHONET Lite ON/OFF mapping.
+- The README documents the `on`/`off` support status and mapping targets for each protocol.
 
 ---
 
-### 明示的に保留（議論なしに実装しない）
+### Phase 3 — Multi-protocol enablement (refactor only)
 
-これらは **casa 本体には実装しない**。必要になったら上層（`casad`）の責務とする。
+**Goal**: Reach a state where a second protocol can be added without a rewrite. No new protocol is added yet.
 
-- **キャッシュ / ローカル DB**。`casad` のメモリキャッシュで対応する。casa にファイルキャッシュを足さない。
-- **設定ファイルの自動マイグレーション**。明示コマンドのみ、自動は不可。
-- **ディスカバリ**。`enl discover` を直接叩く運用。casa はラップしない。
-- **状態変化の監視（INF 通知の待受）**。`casad` の責務（実装済み: `enl listen` をループで回す）。casa(bin) は購読を持たない。
-- **デーモン・常駐モード**。casa(bin) には実装しない。常駐は別 crate `casad` が担う（実装済み）。
-- **HTTP / WebSocket / MCP サーバ**。`casad` の責務。
-- **LLM Function Calling 受け口**。`casad` の責務。
+**Scope**:
+- Refactor the child runner and subcommand handlers so that adding a new protocol requires only the following:
+  1. Add a variant to the protocol enum.
+  2. Add an adapter that builds that protocol's CLI arguments.
+  3. Add tests for the adapter.
+- The config's `protocol` field is the single source of truth for dispatch.
 
----
+**Out of scope**:
+- Actually adding SwitchBot or Matter (only once the official `switchbot` / self-authored `mat`, etc. are ready).
 
-## やらないこと
-
-- プロトコルバイト列を casa 内で組まない／パースしない。
-- 子 CLI を crate 依存しない（必ずサブプロセス）。
-- casa(bin) にデーモン化・常駐・内部スケジューラを足さない（それらは同一ワークスペースの別 crate `casad` が担う）。
-- キャッシュ・DB を足さない（`casad` の責務）。
-- HTTP / WebSocket / MCP サーバを casa に組み込まない（`casad` の責務）。
-- 実設定ファイル・実トポロジをこのリポジトリにコミットしない。
+**Acceptance criteria**:
+- An adapter trait or function table clearly exists.
+- Adding a virtual adapter in tests can be done without touching the subcommand handlers at all.
 
 ---
 
-## 開発コマンド
+### Phase 4 onward — Adding real protocols
+
+Each addition is one Phase 3-style adapter. Subcommands and the config schema do not change (other than a new value for `protocol`).
+
+- **SwitchBot**: Write an adapter that calls the official `switchbot` CLI (`@switchbot/openapi-cli`). **Do not write a self-authored CLI.** Authentication is handled entirely by the official CLI, so casa does not deal with credentials (there is basically no need to pass anything from environment variables or the config file). Only communicate to the caller that going via OpenAPI = a cloud round trip, so its latency characteristics differ from enl.
+  - If direct BLE control or fully-local operation becomes necessary in the future, there is a possibility of switching to a self-authored CLI (`sbl`, etc.). Even then, keep the adapter closed around the assumption that the official CLI exists, so that the casa side only needs to change which binary `protocol = "switchbot"` dispatches to.
+- **Matter**: **Supported**. Add an adapter that calls the self-authored `mat` (a chip-tool wrapper). Because Matter addresses by (node_id, endpoint, cluster, attribute), casa's single selector `<epc>` is interpreted as `endpoint/cluster/attribute` and assigned to `mat read`/`write`. `on`/`off` invoke the OnOff command (`mat on`/`off`). In the config, `node_id` is required and `endpoint` is optional. Only one variant is added to the Phase 3 adapter trait; the subcommand handlers are unchanged.
+
+---
+
+### Explicitly deferred (do not implement without discussion)
+
+These are **not implemented in casa itself**. When they become necessary, they are the responsibility of the upper layer (`casad`).
+
+- **Cache / local DB.** Handle it with `casad`'s in-memory cache. Do not add a file cache to casa.
+- **Automatic migration of the config file.** Explicit command only; automatic is not allowed.
+- **Discovery.** The operational approach is to call `enl discover` directly. casa does not wrap it.
+- **Monitoring state changes (waiting for INF notifications).** `casad`'s responsibility (implemented: run `enl listen` in a loop). casa(bin) holds no subscription.
+- **Daemon / resident mode.** Not implemented in casa(bin). The long-running behavior is handled by the separate crate `casad` (implemented).
+- **HTTP / WebSocket / MCP server.** `casad`'s responsibility.
+- **Endpoint for LLM Function Calling.** `casad`'s responsibility.
+
+---
+
+## Things not to do
+
+- Do not assemble/parse protocol byte sequences inside casa.
+- Do not add a crate dependency on child CLIs (always subprocess).
+- Do not add daemonization, long-running/resident behavior, or an internal scheduler to casa(bin) (those are handled by the separate crate `casad` in the same workspace).
+- Do not add a cache or DB (`casad`'s responsibility).
+- Do not embed an HTTP / WebSocket / MCP server into casa (`casad`'s responsibility).
+- Do not commit real config files or real topology into this repository.
+
+---
+
+## Development commands
 
 ```bash
 cargo build

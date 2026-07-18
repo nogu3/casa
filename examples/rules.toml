@@ -1,16 +1,16 @@
-# casad ルールファイルのサンプル。参照デバイスは examples/devices.toml の名前に対応。
-# 書き手は LLM / UI を想定（人間の手書きは前提にしないが、直接覗ける可読性は確保する）。
+# Sample casad rules file. Referenced devices correspond to the names in examples/devices.toml.
+# Authors are expected to be LLMs / UIs (hand-authoring by humans is not assumed, but readability for direct inspection is kept).
 
 version = 1
 
-# イベントトリガ: living_aircon の EPC 0x80（電源）が 0x30（ON）になったら寝室灯を点ける。
+# Event trigger: when living_aircon's EPC 0x80 (power) becomes 0x30 (ON), turn on the bedroom light.
 [[rules]]
-name = "エアコン起動で寝室灯ON"
+name = "bedroom light ON when aircon starts"
 when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
 then = { action = "on", device = "bedroom_light" }
 
-# 時刻トリガ: 毎日 22:00 に寝室灯を消す。
+# Time trigger: turn off the bedroom light every day at 22:00.
 [[rules]]
-name = "22時に寝室消灯"
+name = "bedroom light off at 22:00"
 when = { at = "22:00" }
 then = { action = "off", device = "bedroom_light" }

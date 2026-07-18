@@ -1,5 +1,5 @@
-# casa 設定ファイルのサンプル。値はすべてダミー（RFC 5737 の 192.0.2.0/24）。
-# 実運用の設定は別リポジトリで管理し、~/.config/casa/devices.toml に配置する。
+# Sample casa config file. All values are dummies (RFC 5737 192.0.2.0/24).
+# Manage your real config in a separate repository and place it at ~/.config/casa/devices.toml.
 
 version = 1
 
@@ -17,8 +17,8 @@ eoj = "0x029101"
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
 
-# Matter デバイス。node_id は commission 済みノードの識別子（ここではダミー）。
-# endpoint は on/off ショートカット用の任意上書き（未指定なら mat の既定 1）。
+# Matter device. node_id is the identifier of a commissioned node (dummy here).
+# endpoint is an optional override for the on/off shortcut (defaults to mat's default of 1 if unset).
 [devices.living_light]
 protocol = "matter"
 node_id = "1234"

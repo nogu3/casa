@@ -1,6 +1,6 @@
 [package]
 name = "casa"
-description = "スマートホーム横断クライアント。プロトコル固有 CLI をサブプロセスで呼び、名前マッピングと統一 UX を提供する。"
+description = "Cross-protocol smart-home client. Calls protocol-specific CLIs as subprocesses and provides name mapping and a unified UX."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
