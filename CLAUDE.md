@@ -213,6 +213,8 @@ Web ページ / LLM / その他クライアント
 ### `casad` 側が担う責務（casa の責務ではない）
 - 自動化ルール DSL（`rules.toml`）の評価エンジン — **実装済み**:
   - 時刻トリガ（内部スケジューラ）/ イベントトリガ（`enl listen` をループで回して INF 通知に反応）
+  - 発火はデバイス別ワーカーへ非同期投入（同一デバイス FIFO・異デバイス並列）。
+    アクション実行中も `enl listen` は止まらない。`--once` / `--listen-once` は同期実行。
   - 発火時は casa を子プロセスとして呼ぶ（`casad run` / `check`）。`then` は `on` / `off` / `invoke`
     をサポート（`invoke` は `device` / `command` / 任意の `args` を取り、`casa invoke` に委譲する）。
 - ECHONET の INF 通知の購読（`enl listen` 経由。enl 側が「listen は外部ループから回す」設計）— **実装済み**

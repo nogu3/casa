@@ -1,5 +1,6 @@
 mod casa_runner;
 mod cli;
+mod dispatch;
 mod engine;
 mod enl;
 mod rules;
