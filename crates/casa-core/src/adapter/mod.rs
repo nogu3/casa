@@ -7,6 +7,7 @@
 
 pub mod echonet;
 pub mod matter;
+pub mod switchbot;
 
 use crate::config::Device;
 
@@ -59,8 +60,8 @@ pub fn adapter_for(device: &Device) -> Option<&'static dyn Adapter> {
     match device {
         Device::Echonet { .. } => Some(&echonet::EchonetAdapter),
         Device::Matter { .. } => Some(&matter::MatterAdapter),
-        // Phase 4: 公式 switchbot CLI（@switchbot/openapi-cli）を呼ぶアダプタを追加する。
-        Device::Switchbot { .. } => None,
+        // SwitchBot: 自作 `swb`（クラウド API v1.1 ラッパ）を呼ぶ。公式 CLI ではない。
+        Device::Switchbot { .. } => Some(&switchbot::SwitchbotAdapter),
     }
 }
 
@@ -89,10 +90,11 @@ mod tests {
     }
 
     #[test]
-    fn switchbot_has_no_adapter_yet() {
+    fn switchbot_devices_dispatch_to_switchbot_adapter() {
         let device = Device::Switchbot {
             device_id: "DUMMY-XX-XX".into(),
         };
-        assert!(adapter_for(&device).is_none());
+        let adapter = adapter_for(&device).unwrap();
+        assert_eq!(adapter.power(&device, true).unwrap().bin, "swb");
     }
 }
