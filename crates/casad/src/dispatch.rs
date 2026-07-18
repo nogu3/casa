@@ -61,7 +61,15 @@ impl<'env> Dispatcher<'env> {
             return false;
         };
         tracing::debug!(rule = %rule.name, device, "queueing rule action");
-        tx.send(rule).is_ok()
+        match tx.send(rule) {
+            Ok(()) => true,
+            Err(_) => {
+                // ワーカー消失（panic 等）。常駐では scope join に到達せず気づけないため
+                // ここで可視化する。
+                tracing::warn!(rule = %rule.name, device, "worker gone; dropping action");
+                false
+            }
+        }
     }
 
     /// 複数ルールを順に積み、積めた件数を返す。

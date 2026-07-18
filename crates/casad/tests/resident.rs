@@ -15,6 +15,17 @@ use std::time::{Duration, Instant};
 
 use common::*;
 
+/// 失敗経路でも常駐 casad を確実に殺すガード（casad は自発終了しないため、
+/// kill 前の assert が panic すると不死のプロセスが残る）。
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 const EVENT_RULES: &str = r#"
 version = 1
 [[rules]]
@@ -30,21 +41,23 @@ fn resident_event_loop_fires_casa_via_worker() {
     let rules_path = dir.path().join("rules.toml");
     std::fs::write(&rules_path, EVENT_RULES).unwrap();
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_casad"))
-        .args([
-            "run",
-            rules_path.to_str().unwrap(),
-            "--config",
-            config.to_str().unwrap(),
-        ])
-        .env_remove("CASA_CONFIG")
-        .env("CASA_ENL_BIN", fixture("enl_listen_once_then_block.sh"))
-        .env("CASA_BIN", fixture("casa_record.sh"))
-        .env("CASAD_TEST_DIR", dir.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    let _child = KillOnDrop(
+        std::process::Command::new(env!("CARGO_BIN_EXE_casad"))
+            .args([
+                "run",
+                rules_path.to_str().unwrap(),
+                "--config",
+                config.to_str().unwrap(),
+            ])
+            .env_remove("CASA_CONFIG")
+            .env("CASA_ENL_BIN", fixture("enl_listen_once_then_block.sh"))
+            .env("CASA_BIN", fixture("casa_record.sh"))
+            .env("CASAD_TEST_DIR", dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
 
     let spawns_log = dir.path().join("enl_spawns.log");
     let casa_log = dir.path().join("casa.log");
@@ -96,7 +109,6 @@ fn resident_event_loop_fires_casa_via_worker() {
         std::thread::sleep(Duration::from_millis(50));
     };
 
-    child.kill().unwrap();
-    let _ = child.wait();
     assert!(fired, "casa was not fired via worker within 10s");
+    // 明示 kill は不要（KillOnDrop がスコープ終了時に必ず殺す）。
 }
