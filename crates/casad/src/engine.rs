@@ -14,6 +14,7 @@ use chrono::{Local, NaiveTime, Timelike};
 use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
+use crate::dispatch::{distinct_devices, Dispatcher};
 use crate::rules::{Rule, RuleFile, Trigger};
 use crate::{casa_runner, enl};
 
@@ -110,21 +111,29 @@ pub fn event_matches(rule: &Rule, config: &Config, event: &enl::Event) -> bool {
         .any(|p| norm_hex(&p.epc) == norm_hex(epc) && norm_hex(&p.edt_hex) == norm_hex(equals))
 }
 
-/// 1 バッチの通知に対し、一致するイベントトリガをそれぞれ 1 回ずつ発火する。
-/// 同じルールが複数通知に一致しても発火は 1 回。発火した件数を返す。
+/// 1 バッチの通知に一致するイベントトリガのルールを返す（rules.toml 記載順）。
+/// 同じルールが複数通知に一致しても 1 回だけ含む。
+fn due_event_rules<'a>(
+    file: &'a RuleFile,
+    config: &Config,
+    events: &[enl::Event],
+) -> Vec<&'a Rule> {
+    file.rules
+        .iter()
+        .filter(|r| matches!(r.when, Trigger::Event { .. }))
+        .filter(|r| events.iter().any(|e| event_matches(r, config, e)))
+        .collect()
+}
+
+/// 1 バッチの通知に対し、一致するイベントトリガを同期・直列に発火する
+/// （`--listen-once` 用）。発火した件数を返す。
 pub fn fire_due_events(
     file: &RuleFile,
     config: &Config,
     events: &[enl::Event],
     config_path: Option<&Path>,
 ) -> usize {
-    let due: Vec<&Rule> = file
-        .rules
-        .iter()
-        .filter(|r| matches!(r.when, Trigger::Event { .. }))
-        .filter(|r| events.iter().any(|e| event_matches(r, config, e)))
-        .collect();
-    fire_all(due, config_path)
+    fire_all(due_event_rules(file, config, events), config_path)
 }
 
 /// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。発火件数を返す。
@@ -138,21 +147,29 @@ pub fn drain_events_once(
     Ok(fire_due_events(file, config, &events, config_path))
 }
 
-/// 与えられたルール群をすべて発火する。失敗はループを止めず warn ログに残す。
-/// 成功（casa が exit 0）した件数を返す。非ゼロ exit は casa 側の失敗
-/// （子 CLI タイムアウト等。コードは casa の規約参照）なので、spawn 失敗と同様に warn する。
-fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
-    let mut fired = 0;
-    for rule in rules {
-        match fire(rule, config_path) {
-            Ok(0) => fired += 1,
-            Ok(code) => {
-                tracing::warn!(rule = %rule.name, code, "rule action exited nonzero");
-            }
-            Err(e) => tracing::warn!(rule = %rule.name, error = %e, "rule action failed"),
+/// 1 ルールを実行し、成功（casa が exit 0）なら true。失敗は warn ログに残す。
+/// 同期経路（`fire_all`）と非同期ワーカー（dispatcher）の両方がこれを使う。
+fn run_one(rule: &Rule, config_path: Option<&Path>) -> bool {
+    match fire(rule, config_path) {
+        Ok(0) => true,
+        Ok(code) => {
+            tracing::warn!(rule = %rule.name, code, "rule action exited nonzero");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(rule = %rule.name, error = %e, "rule action failed");
+            false
         }
     }
-    fired
+}
+
+/// 与えられたルール群を同期・直列にすべて発火する（`--once` / `--listen-once` 用）。
+/// 成功した件数を返す。失敗はループを止めない（常駐の頑健性）。
+fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
+    rules
+        .into_iter()
+        .filter(|rule| run_one(rule, config_path))
+        .count()
 }
 
 /// ルールエンジンを走らせる。`--once` は時刻 1 tick で終了、常駐は時刻スケジューラ
@@ -177,32 +194,49 @@ pub fn run(
         .iter()
         .any(|r| matches!(r.when, Trigger::Event { .. }));
 
-    // scope で借用を渡し、Arc/clone なしに 2 ループを並行させる。どちらも無限ループ。
+    // scope で借用を渡し、Arc/clone なしに 2 ループ + ワーカー群を並行させる。
+    // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
+    // 異デバイス並列）。listen / tick ループはアクション完了を待たない。
     std::thread::scope(|s| {
+        let dispatcher = Dispatcher::new(s, distinct_devices(file), move |rule: &Rule| {
+            run_one(rule, config_path);
+        });
         if has_events {
-            s.spawn(|| event_loop(file, config, enl_bin, config_path));
+            let d = dispatcher.clone();
+            s.spawn(move || event_loop(file, config, enl_bin, &d));
         }
-        time_loop(file, config_path);
+        time_loop(file, &dispatcher);
     });
     Ok(0) // time_loop は戻らないので到達しない。
 }
 
-/// 時刻スケジューラ。毎分の境界で tick する。
-fn time_loop(file: &RuleFile, config_path: Option<&Path>) -> ! {
+/// 時刻スケジューラ。毎分の境界で該当ルールをワーカーに積む。
+fn time_loop<'env>(file: &'env RuleFile, dispatcher: &Dispatcher<'env>) -> ! {
     loop {
         let now = Local::now().time();
-        tick(file, now, config_path);
+        let queued = dispatcher.dispatch_all(due_time_rules(file, now));
+        if queued > 0 {
+            tracing::debug!(queued, "time rules queued");
+        }
         sleep_to_next_minute();
     }
 }
 
-/// イベントリスナ。`enl listen` を回し続け、通知でイベントトリガを発火する。
+/// イベントリスナ。`enl listen` を回し続け、一致ルールをワーカーに積んで即再 listen する。
 /// enl 起動失敗・異常終了はバックオフして再試行（常駐の頑健性）。
-fn event_loop(file: &RuleFile, config: &Config, enl_bin: &str, config_path: Option<&Path>) -> ! {
+fn event_loop<'env>(
+    file: &'env RuleFile,
+    config: &Config,
+    enl_bin: &str,
+    dispatcher: &Dispatcher<'env>,
+) -> ! {
     loop {
         match enl::listen_once(enl_bin) {
             Ok(events) => {
-                fire_due_events(file, config, &events, config_path);
+                let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events));
+                if queued > 0 {
+                    tracing::debug!(queued, "event rules queued");
+                }
             }
             Err(e) => {
                 tracing::warn!(error = %e, "enl listen failed; backing off");
