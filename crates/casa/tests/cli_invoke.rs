@@ -64,8 +64,8 @@ fn invoke_injects_echonet_address_and_passes_args_through() {
             config.to_str().unwrap(),
             "invoke",
             "living_aircon",
-            "blink",
-            "--epc",
+            "raw",
+            "0x62",
             "0x80",
         ],
         &[("CASA_ENL_BIN", &fixture("enl_args.sh"))],
@@ -80,17 +80,9 @@ fn invoke_injects_echonet_address_and_passes_args_through() {
     let v = stdout_json(&out);
     assert_eq!(v["device"], "living_aircon");
     assert_eq!(v["protocol"], "echonet");
-    assert_eq!(v["command"], "blink");
+    assert_eq!(v["command"], "raw");
     assert!(v["timestamp"].is_string(), "timestamp missing: {v}");
-    let expected = serde_json::json!([
-        "blink",
-        "--ip",
-        "192.0.2.10",
-        "--eoj",
-        "0x013001",
-        "--epc",
-        "0x80"
-    ]);
+    let expected = serde_json::json!(["raw", "192.0.2.10", "0x013001", "0x62", "0x80"]);
     assert_eq!(v["value"]["args"], expected);
 }
 
@@ -131,7 +123,7 @@ fn invoke_group_runs_members_and_tags_command() {
             config.to_str().unwrap(),
             "invoke",
             "living",
-            "blink",
+            "describe",
         ],
         &[("CASA_ENL_BIN", &fixture("enl_args.sh"))],
     );
@@ -139,13 +131,13 @@ fn invoke_group_runs_members_and_tags_command() {
     assert_eq!(out.status.code(), Some(0));
     let v = stdout_json(&out);
     assert_eq!(v["group"], "living");
-    assert_eq!(v["command"], "blink");
+    assert_eq!(v["command"], "describe");
     let results = v["results"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0]["ok"], true);
     assert_eq!(
         results[0]["value"]["args"],
-        serde_json::json!(["blink", "--ip", "192.0.2.11", "--eoj", "0x029101"])
+        serde_json::json!(["describe", "192.0.2.11", "0x029101"])
     );
 }
 

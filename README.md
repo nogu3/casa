@@ -175,17 +175,19 @@ casa はプロトコル固有 CLI が `PATH` 上に存在することを前提�
 
 | プロトコル | CLI | 想定最低バージョン | 状態 |
 |---|---|---|---|
-| ECHONET Lite | `enl` | casa: 0.1.0（`get` / `set` が stdout に JSON を出すこと）。casad: 1.5.0（`listen` があり、常駐 listen と one-shot の 3610 共存モデルを持つこと） | 対応済み |
+| ECHONET Lite | `enl` | casa / casad とも 1.5.0（アドレスを位置引数で取る CLI。`listen` があり、常駐 listen と one-shot の 3610 共存モデルを持つこと） | 対応済み |
 | Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe` が stdout に JSON を出すこと | 対応済み |
 | SwitchBot | `switchbot` | — | 未対応（Phase 4） |
 
 casa が呼ぶ enl のインターフェース（enl の出荷に合わせて追従する）:
 
 ```
-enl get --ip <ip> --eoj <eoj> --epc <epc>
-enl set --ip <ip> --eoj <eoj> --epc <epc> --value <value>
-enl describe --ip <ip> --eoj <eoj>
+enl get <ip> <eoj> <epc>
+enl set <ip> <eoj> <epc> <edt>
+enl describe <ip> <eoj>
 ```
+
+（enl 1.5 系。`0x` 接頭辞付きの EOJ / EPC は enl 側が正規化して受理する。）
 
 casa が呼ぶ mat のインターフェース（Matter は (node_id, endpoint, cluster, attribute) でアドレスする）:
 

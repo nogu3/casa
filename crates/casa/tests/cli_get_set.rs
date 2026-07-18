@@ -47,15 +47,7 @@ fn get_builds_expected_enl_args() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!([
-        "get",
-        "--ip",
-        "192.0.2.10",
-        "--eoj",
-        "0x013001",
-        "--epc",
-        "0x80"
-    ]);
+    let expected = serde_json::json!(["get", "192.0.2.10", "0x013001", "0x80"]);
     assert_eq!(v["value"]["args"], expected);
 }
 
@@ -69,17 +61,7 @@ fn set_builds_expected_enl_args() {
     assert_eq!(out.status.code(), Some(0));
 
     let v = stdout_json(&out);
-    let expected = serde_json::json!([
-        "set",
-        "--ip",
-        "192.0.2.11",
-        "--eoj",
-        "0x029101",
-        "--epc",
-        "0x80",
-        "--value",
-        "0x30"
-    ]);
+    let expected = serde_json::json!(["set", "192.0.2.11", "0x029101", "0x80", "0x30"]);
     assert_eq!(v["value"]["args"], expected);
 }
 
