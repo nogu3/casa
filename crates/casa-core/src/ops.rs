@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_reports_summary_and_flags_protocols_without_adapter() {
+    fn validate_reports_summary_and_emits_no_adapter_warnings_when_all_have_adapters() {
         let text = r#"
 version = 1
 [devices.aircon]
@@ -513,10 +513,13 @@ version = 1
 [devices.lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+[binaries]
+swb = "/nonexistent/swb"
 "#;
         let config = config::parse(text).unwrap();
 
-        // switchbot アダプタは存在するが、swb バイナリが見つからないので ChildNotFound エラー。
+        // switchbot アダプタは存在するが、swb バイナリが存在しないパスに向けられているので ChildNotFound エラー。
+        // バイナリパスを明示的に設定することで、PATH に依存せず deterministic に検証する。
         let err = invoke(&config, "lock", "press", &[]).unwrap_err();
 
         assert_eq!(err.kind, ErrorKind::ChildNotFound);
