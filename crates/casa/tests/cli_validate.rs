@@ -1,14 +1,14 @@
 //! `casa validate` の統合テスト。設定を読んで妥当性を JSON 報告し、
-//! アダプタ未実装プロトコルを warnings に出すこと・exit code 規約を確認する。
+//! validate の summary 出力（device_count・プロトコル内訳）と warnings・exit code 規約を確認する。
 
 mod common;
 
 use common::*;
 
 #[test]
-fn validate_reports_summary_with_no_adapter_warning() {
+fn validate_reports_summary_for_multi_protocol_config() {
     let dir = tempfile::tempdir().unwrap();
-    // DUMMY_CONFIG: echonet 2 + switchbot 1。switchbot はアダプタ未実装。
+    // DUMMY_CONFIG: echonet 2 + switchbot 1。全プロトコルにアダプタがあるので警告は出ない。
     let config = write_config(dir.path(), DUMMY_CONFIG);
 
     let out = run_casa(&["validate", "--config", config.to_str().unwrap()], &[]);
@@ -23,10 +23,7 @@ fn validate_reports_summary_with_no_adapter_warning() {
     assert_eq!(v["protocols"]["switchbot"], 1);
 
     let warnings = v["warnings"].as_array().unwrap();
-    assert_eq!(warnings.len(), 1);
-    assert_eq!(warnings[0]["kind"], "no_adapter");
-    assert_eq!(warnings[0]["device"], "entry_lock");
-    assert_eq!(warnings[0]["protocol"], "switchbot");
+    assert_eq!(warnings.len(), 0);
 }
 
 #[test]
