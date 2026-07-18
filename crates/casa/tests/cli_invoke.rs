@@ -165,7 +165,7 @@ fn invoke_mixed_protocol_group_exits_14() {
 }
 
 #[test]
-fn invoke_switchbot_exits_14() {
+fn invoke_switchbot_dispatches_to_swb() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), DUMMY_CONFIG);
 
@@ -175,16 +175,23 @@ fn invoke_switchbot_exits_14() {
             config.to_str().unwrap(),
             "invoke",
             "entry_lock",
-            "press",
+            "status",
         ],
-        &[],
+        &[("CASA_SWB_BIN", &fixture("swb_args.sh"))],
     );
 
-    assert_eq!(out.status.code(), Some(14));
     assert_eq!(
-        stderr_error_json(&out)["error"]["kind"],
-        "protocol_unsupported"
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
+    let v = stdout_json(&out);
+    assert_eq!(v["device"], "entry_lock");
+    assert_eq!(v["protocol"], "switchbot");
+    assert_eq!(v["command"], "status");
+    let expected = serde_json::json!(["status", "DUMMY-XX-XX"]);
+    assert_eq!(v["value"]["args"], expected);
 }
 
 #[test]

@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_reports_summary_and_flags_protocols_without_adapter() {
+    fn validate_reports_summary_and_emits_no_adapter_warnings_when_all_have_adapters() {
         let text = r#"
 version = 1
 [devices.aircon]
@@ -345,12 +345,9 @@ device_id = "DUMMY-XX-XX"
         assert_eq!(report["group_count"], 0);
         assert!(report["timestamp"].is_string());
 
-        // switchbot はアダプタ未実装なので no_adapter 警告が 1 件だけ出る。
+        // switchbot にアダプタが実装されたので、警告は出ない。
         let warnings = report["warnings"].as_array().unwrap();
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0]["kind"], "no_adapter");
-        assert_eq!(warnings[0]["device"], "lock");
-        assert_eq!(warnings[0]["protocol"], "switchbot");
+        assert_eq!(warnings.len(), 0);
     }
 
     #[test]
@@ -510,17 +507,21 @@ members = ["light1", "light2"]
     }
 
     #[test]
-    fn invoke_on_protocol_without_adapter_is_protocol_unsupported() {
+    fn invoke_switchbot_when_swb_binary_missing_is_child_not_found() {
         let text = r#"
 version = 1
 [devices.lock]
 protocol = "switchbot"
 device_id = "DUMMY-XX-XX"
+[binaries]
+swb = "/nonexistent/swb"
 "#;
         let config = config::parse(text).unwrap();
 
+        // switchbot アダプタは存在するが、swb バイナリが存在しないパスに向けられているので ChildNotFound エラー。
+        // バイナリパスを明示的に設定することで、PATH に依存せず deterministic に検証する。
         let err = invoke(&config, "lock", "press", &[]).unwrap_err();
 
-        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert_eq!(err.kind, ErrorKind::ChildNotFound);
     }
 }

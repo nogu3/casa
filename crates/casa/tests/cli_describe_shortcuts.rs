@@ -87,12 +87,30 @@ fn off_maps_to_echonet_epc_0x80_value_0x31() {
 }
 
 #[test]
-fn on_unsupported_protocol_exits_14() {
+fn on_switchbot_dispatches_to_swb_cmd_turnon() {
     let (config, _dir) = setup();
     let out = run_casa(
         &["on", "entry_lock", "--config", &config],
-        &[("CASA_ENL_BIN", &fixture("enl_args.sh"))],
+        &[("CASA_SWB_BIN", &fixture("swb_args.sh"))],
     );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let v = stdout_json(&out);
+    let expected = serde_json::json!(["cmd", "DUMMY-XX-XX", "turnOn"]);
+    assert_eq!(v["value"]["args"], expected);
+}
+
+#[test]
+fn get_unsupported_protocol_exits_14() {
+    let (config, _dir) = setup();
+    // get は switchbot では未対応（単一プロパティ read が無い）→ exit 14。
+    // アダプタが None を返す時点で子 CLI は spawn されないため hermetic。
+    let out = run_casa(&["get", "entry_lock", "power", "--config", &config], &[]);
     assert_eq!(out.status.code(), Some(14));
     assert_eq!(
         stderr_error_json(&out)["error"]["kind"],

@@ -38,7 +38,8 @@ pub fn run_casa(args: &[&str], envs: &[(&str, &str)]) -> Output {
     // 親環境の CASA_* がテストに漏れないよう明示的に消す。
     cmd.env_remove("CASA_CONFIG")
         .env_remove("CASA_ENL_BIN")
-        .env_remove("CASA_MAT_BIN");
+        .env_remove("CASA_MAT_BIN")
+        .env_remove("CASA_SWB_BIN");
     cmd.args(args);
     for (k, v) in envs {
         cmd.env(k, v);
