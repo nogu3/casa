@@ -34,7 +34,7 @@ Protocol-specific CLIs that are meant to be called by casa follow this policy:
 | Protocol | CLI name | Status |
 |---|---|---|
 | ECHONET Lite | `enl` | Self-authored, in development (standalone repository) |
-| SwitchBot | `switchbot` | Uses the official CLI (`@switchbot/openapi-cli`, via OpenAPI). May switch to a self-authored CLI in the future. |
+| SwitchBot | `swb` | Self-authored (cloud API v1.1 wrapper, standalone repository). Originally planned around the official CLI (`@switchbot/openapi-cli`), but `swb` unblocked the work first and is what casa's adapter actually calls. `swb` also has a BLE passive-scan plane (`scan`), not yet integrated into casa. |
 | Matter | `mat` | Self-authored CLI (chip-tool wrapper, standalone repository). casa adapter supported. `mtr` is not used because it collides with the existing network diagnostic tool. |
 
 casa assumes **these exist on `PATH`**.
@@ -118,7 +118,7 @@ User / cron / n8n / other orchestrator
         ▼
       casa  ◄── devices.toml (managed separately)
         │
-        │  Command::new("enl") / "switchbot" / "mat"
+        │  Command::new("enl") / "swb" / "mat"
         ▼
    protocol-specific CLI (stdout = JSON)
         │
@@ -127,7 +127,7 @@ User / cron / n8n / other orchestrator
 ```
 
 ### Resolving the child CLI binary
-- Default: resolve `enl` / `switchbot` / `mat` from `PATH`.
+- Default: resolve `enl` / `swb` / `mat` from `PATH`.
 - Override: a full path can be specified via an environment variable (`CASA_ENL_BIN`, etc.) or the config file.
 - Startup failure (binary missing / not executable) must be immediately distinguishable via a dedicated exit code.
 
@@ -197,7 +197,7 @@ Web page / LLM / other client
    casa (stays stateless. crates/casa)
        │
        ▼
-   enl / switchbot / mat
+   enl / swb / mat
 ```
 
 ### Reasons to uphold this separation
@@ -329,7 +329,7 @@ Each phase defines the following:
 - The config's `protocol` field is the single source of truth for dispatch.
 
 **Out of scope**:
-- Actually adding SwitchBot or Matter (only once the official `switchbot` / self-authored `mat`, etc. are ready).
+- Actually adding SwitchBot or Matter (only once the self-authored `swb` / `mat`, etc. are ready).
 
 **Acceptance criteria**:
 - An adapter trait or function table clearly exists.
@@ -341,8 +341,7 @@ Each phase defines the following:
 
 Each addition is one Phase 3-style adapter. Subcommands and the config schema do not change (other than a new value for `protocol`).
 
-- **SwitchBot**: Write an adapter that calls the official `switchbot` CLI (`@switchbot/openapi-cli`). **Do not write a self-authored CLI.** Authentication is handled entirely by the official CLI, so casa does not deal with credentials (there is basically no need to pass anything from environment variables or the config file). Only communicate to the caller that going via OpenAPI = a cloud round trip, so its latency characteristics differ from enl.
-  - If direct BLE control or fully-local operation becomes necessary in the future, there is a possibility of switching to a self-authored CLI (`sbl`, etc.). Even then, keep the adapter closed around the assumption that the official CLI exists, so that the casa side only needs to change which binary `protocol = "switchbot"` dispatches to.
+- **SwitchBot**: **Supported (cloud control plane only)**. Add an adapter that calls the self-authored `swb` (a SwitchBot cloud API v1.1 wrapper) — **not the official CLI**; `swb` unblocked the work before an official-CLI-based adapter was written, so it is what casa actually dispatches to. Authentication (`SWITCHBOT_TOKEN` / `SWITCHBOT_SECRET`) is handled entirely by `swb` via inherited environment variables; casa passes no credentials of its own. `on`/`off` map to `swb cmd <device_id> turnOn`/`turnOff`. The cloud API has no single-property read/write, so `get`/`set`/`describe` remain unsupported (trait default `None` → exit 14); reading state instead goes through `casa invoke <name> status` (`swb status <device_id>`), and `casa invoke <name> cmd <command> [args...]` sends an arbitrary SwitchBot cloud command (`swb cmd <device_id> <command> [args...]`, `device_id` injected as the positional argument right after the subcommand). `swb`'s BLE passive-scan plane (`scan`) is a separate, fully-local plane not yet integrated into casa — that is future, separate work.
 - **Matter**: **Supported**. Add an adapter that calls the self-authored `mat` (a chip-tool wrapper). Because Matter addresses by (node_id, endpoint, cluster, attribute), casa's single selector `<epc>` is interpreted as `endpoint/cluster/attribute` and assigned to `mat read`/`write`. `on`/`off` invoke the OnOff command (`mat on`/`off`). In the config, `node_id` is required and `endpoint` is optional. Only one variant is added to the Phase 3 adapter trait; the subcommand handlers are unchanged.
 
 ---

@@ -53,7 +53,10 @@ protocol-dependent: for ECHONET Lite it is an EPC (e.g. `0x80`), for Matter it i
 required fields, and unknown protocols are already checked at load time). In
 addition, it lists protocols that are valid as config but have no adapter yet —
 which would fail at runtime with `protocol_unsupported` (exit 14) — under
-`warnings`:
+`warnings`. All protocols currently in the `Device` enum (echonet / matter /
+switchbot) have an adapter, so `warnings` is empty for any config built from
+them; the field exists for the (currently hypothetical) case of a protocol
+that parses but has no adapter implementation yet:
 
 ```json
 {
@@ -62,10 +65,7 @@ which would fail at runtime with `protocol_unsupported` (exit 14) — under
   "version": 1,
   "device_count": 2,
   "protocols": { "echonet": 1, "switchbot": 1 },
-  "warnings": [
-    { "kind": "no_adapter", "device": "entry_lock", "protocol": "switchbot",
-      "detail": "protocol \"switchbot\" has no adapter yet; get/set/on/off will fail at runtime" }
-  ],
+  "warnings": [],
   "valid": true
 }
 ```
@@ -189,7 +189,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 |---|---|---|---|
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
 | Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe` emit JSON to stdout | Supported |
-| SwitchBot | `switchbot` | — | Not supported (Phase 4) |
+| SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
 
 The enl interface that casa calls (it follows enl's shipped releases):
 
@@ -235,6 +235,26 @@ The `<property>` of `get` / `set` is in `endpoint/cluster/attribute` form
 interpret this selector; it just splits it on `/` and passes it to mat, and
 validity is verified on the mat (chip-tool) side.
 
+The swb interface that casa calls (SwitchBot's cloud API has no single-property
+read/write; `device_id` is injected as the first positional argument right
+after the subcommand):
+
+```
+# casa on <name> / casa off <name>
+swb cmd <device_id> turnOn
+swb cmd <device_id> turnOff
+# casa invoke <name> status  (the only way to read state; returns the full status)
+swb status <device_id>
+# casa invoke <name> cmd <switchbot-command> [args...]  (send an arbitrary cloud command)
+swb cmd <device_id> <switchbot-command> [args...]
+```
+
+casa passes no authentication of its own; `SWITCHBOT_TOKEN` / `SWITCHBOT_SECRET`
+are swb's concern and reach it via inherited environment variables on the child
+process. `get` / `set` / `describe` are not supported for SwitchBot (exit 14
+`protocol_unsupported`) because the SwitchBot cloud API has no single-property
+read/write and swb has no property-map introspection.
+
 ### `on` / `off` support and mapping targets
 
 The shortcut mappings are hardcoded inside casa as UX, not as protocol logic.
@@ -243,12 +263,17 @@ The shortcut mappings are hardcoded inside casa as UX, not as protocol logic.
 |---|---|---|---|
 | ECHONET Lite | Yes | Yes | set EPC `0x80` to `0x30` (ON) / `0x31` (OFF) |
 | Matter | Yes | Yes | invoke the On / Off commands of the OnOff cluster (`mat on`/`off`, the endpoint is `endpoint` from the config) |
-| SwitchBot | No | No | Not supported (to be supported when the adapter is added in Phase 4) |
+| SwitchBot | Yes | Yes | send `swb cmd <device_id> turnOn` / `turnOff` |
 
-`describe` is the same: ECHONET Lite uses `enl describe` (property map), Matter
-uses `mat describe` (endpoint / cluster introspection of the node), and SwitchBot
-is not supported (`casa describe` returns exit 14, and `casa list --describe`
-yields `properties: null`).
+`get` / `set` have no SwitchBot equivalent (the cloud API has no single-property
+read/write), so both return exit 14 `protocol_unsupported` for that protocol;
+reading state instead goes through `casa invoke <name> status` (see below).
+
+`describe` follows the same shape: ECHONET Lite uses `enl describe` (property
+map), Matter uses `mat describe` (endpoint / cluster introspection of the
+node), and SwitchBot is not supported (`casa describe` returns exit 14, and
+`casa list --describe` yields `properties: null`) because swb has no
+property-map introspection.
 
 Color-temperature changes have no dedicated subcommand in casa (`casa color-temp`
 was removed in v0.6.0; see the "Verb promotion criteria" section). Calling
@@ -256,11 +281,17 @@ was removed in v0.6.0; see the "Verb promotion criteria" section). Calling
 delegates directly to `mat color-temp --node <node_id> [--endpoint <ep>]` on
 Matter. Mutual-exclusion validation of `--kelvin` / `--mireds` and clamping of
 out-of-range values are the responsibility of mat / the device, not casa (casa
-passes the arguments through without interpreting them). Because SwitchBot has no
-adapter yet, `invoke` itself returns exit 14 `protocol_unsupported`. ECHONET Lite
-does have an adapter, but `enl` has no command equivalent to `color-temp`, so
-passing it propagates enl's own "unknown subcommand" error with the child CLI's
-exit code intact.
+passes the arguments through without interpreting them). ECHONET Lite does have
+an adapter, but `enl` has no command equivalent to `color-temp`, so passing it
+propagates enl's own "unknown subcommand" error with the child CLI's exit code
+intact.
+
+SwitchBot's adapter supports `invoke` for the general case: `casa invoke <name>
+status` runs `swb status <device_id>` and returns the full status (there is no
+single-property read on the cloud API, so this is also how state is read in
+place of `get`). `casa invoke <name> cmd <switchbot-command> [args...]` runs
+`swb cmd <device_id> <switchbot-command> [args...]`, sending any SwitchBot cloud
+command through unchanged.
 
 Binary resolution defaults to `PATH`. It can be overridden as follows (the
 environment variable takes precedence):
@@ -420,4 +451,21 @@ casa get living_aircon 0x80
 # 4. Make the device unreachable (e.g. by powering it off) and confirm enl's timeout exit code
 #    is returned from casa as-is (check with echo $?)
 casa get living_aircon 0x80; echo $?
+```
+
+In an environment with real swb and a real SwitchBot cloud device, verify the
+following (swb reads `SWITCHBOT_TOKEN` / `SWITCHBOT_SECRET` from the
+environment; casa passes no credentials of its own):
+
+```bash
+# 0. Export the credentials swb needs (casa does not read or pass these itself)
+export SWITCHBOT_TOKEN=...
+export SWITCHBOT_SECRET=...
+
+# 1. Confirm the device turns on / off
+casa on entry_lock
+casa off entry_lock
+
+# 2. Confirm the full status can be read (there is no single-property get for SwitchBot)
+casa invoke entry_lock status
 ```
