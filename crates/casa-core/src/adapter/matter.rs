@@ -219,7 +219,9 @@ mod tests {
     #[test]
     fn invoke_injects_node_and_passes_args_through() {
         let extra: Vec<String> = vec!["--kelvin".into(), "2700".into()];
-        let inv = MatterAdapter.invoke(&device(), "color-temp", &extra).unwrap();
+        let inv = MatterAdapter
+            .invoke(&device(), "color-temp", &extra)
+            .unwrap();
         assert_eq!(inv.bin, "mat");
         assert_eq!(
             args(&inv),

@@ -48,7 +48,9 @@ pub fn run(bin: &str, args: &[String]) -> Result<serde_json::Value, CasaError> {
 /// 回収でもパイプバッファ詰まりは実質問題にならない。
 ///
 /// 1 要素の失敗（spawn 失敗・非ゼロ終了・不正 JSON）は他の要素に影響しない。
-pub fn run_parallel(commands: &[(String, Vec<String>)]) -> Vec<Result<serde_json::Value, CasaError>> {
+pub fn run_parallel(
+    commands: &[(String, Vec<String>)],
+) -> Vec<Result<serde_json::Value, CasaError>> {
     let children: Vec<Result<std::process::Child, CasaError>> = commands
         .iter()
         .map(|(bin, args)| {

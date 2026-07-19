@@ -57,7 +57,10 @@ fn check_valid_rules_reports_count() {
     // invoke ルールも then がそのまま JSON 化される（command / args を含む）。
     assert_eq!(v["rules"][2]["then"]["action"], "invoke");
     assert_eq!(v["rules"][2]["then"]["command"], "color-temp");
-    assert_eq!(v["rules"][2]["then"]["args"], serde_json::json!(["--kelvin", "2700"]));
+    assert_eq!(
+        v["rules"][2]["then"]["args"],
+        serde_json::json!(["--kelvin", "2700"])
+    );
 }
 
 #[test]

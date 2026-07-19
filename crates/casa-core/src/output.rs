@@ -166,8 +166,11 @@ mod tests {
             ip: "192.0.2.10".into(),
             eoj: "0x013001".into(),
         };
-        let entry =
-            group_member_result("living_aircon", &device, &Ok(serde_json::json!({"power": "on"})));
+        let entry = group_member_result(
+            "living_aircon",
+            &device,
+            &Ok(serde_json::json!({"power": "on"})),
+        );
         assert_eq!(entry["device"], "living_aircon");
         assert_eq!(entry["protocol"], "echonet");
         assert_eq!(entry["ok"], true);

@@ -393,9 +393,10 @@ members = ["light1", "light2"]
         let config = config::parse(GROUP_CONFIG).unwrap();
         let group = config.groups.get("living").unwrap();
 
-        let response =
-            run_group(&config, "living", group, "on", |_, device| echo_invocation(device))
-                .unwrap();
+        let response = run_group(&config, "living", group, "on", |_, device| {
+            echo_invocation(device)
+        })
+        .unwrap();
 
         assert_eq!(response["group"], "living");
         assert!(response["timestamp"].is_string());

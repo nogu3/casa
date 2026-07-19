@@ -129,7 +129,10 @@ mod tests {
     #[test]
     fn group_partial_failure_is_exit_15() {
         assert_eq!(ErrorKind::GroupPartialFailure.exit_code(), 15);
-        assert_eq!(ErrorKind::GroupPartialFailure.as_str(), "group_partial_failure");
+        assert_eq!(
+            ErrorKind::GroupPartialFailure.as_str(),
+            "group_partial_failure"
+        );
     }
 
     #[test]

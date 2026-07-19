@@ -29,7 +29,10 @@ fn validate_reports_summary_for_multi_protocol_config() {
 #[test]
 fn validate_on_invalid_config_exits_10() {
     let dir = tempfile::tempdir().unwrap();
-    let config = write_config(dir.path(), "version = 1\n[devices.x]\nprotocol = \"zigbee\"\n");
+    let config = write_config(
+        dir.path(),
+        "version = 1\n[devices.x]\nprotocol = \"zigbee\"\n",
+    );
 
     let out = run_casa(&["validate", "--config", config.to_str().unwrap()], &[]);
     assert_eq!(out.status.code(), Some(10));

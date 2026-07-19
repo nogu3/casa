@@ -25,10 +25,7 @@ fn exec_on_spawns_casa_with_mapped_args() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     // casad は casa へ `--config <path> on living_aircon` を渡す
     // （--config は casa のグローバルフラグとして先頭。invoke の trailing 引数対策）。
-    assert!(
-        stdout.contains("on living_aircon"),
-        "stdout: {stdout}"
-    );
+    assert!(stdout.contains("on living_aircon"), "stdout: {stdout}");
     assert!(stdout.contains("--config"), "stdout: {stdout}");
 }
 
@@ -63,13 +60,7 @@ fn exec_unknown_name_fails_without_spawning_casa() {
     // casa が起動されれば exit 99 になる細工。実際は link 側の名前解決で弾かれ、
     // casa は起動されず name_not_found(11) になるはず。
     let out = run_casad(
-        &[
-            "--config",
-            config.to_str().unwrap(),
-            "exec",
-            "on",
-            "nope",
-        ],
+        &["--config", config.to_str().unwrap(), "exec", "on", "nope"],
         &[
             ("CASA_BIN", &fixture("casa_stub.sh")),
             ("CASA_FAKE_EXIT", "99"),

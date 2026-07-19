@@ -56,7 +56,10 @@ impl Adapter for EchonetAdapter {
         let (ip, eoj) = address(device)?;
         let mut all = vec![command.to_string(), ip.to_string(), eoj.to_string()];
         all.extend(args.iter().cloned());
-        Some(Invocation { bin: BIN, args: all })
+        Some(Invocation {
+            bin: BIN,
+            args: all,
+        })
     }
 }
 
