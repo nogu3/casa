@@ -208,12 +208,17 @@ Web page / LLM / other client
 
 ### Responsibilities the `casad` side takes on (not casa's responsibilities)
 - Evaluation engine for the automation rule DSL (`rules.toml`) — **implemented**:
-  - Time triggers (internal scheduler) / event triggers (run `enl listen` in a loop and react to INF notifications)
+  - Time triggers (internal scheduler) / event triggers (run `enl listen` in a
+    loop for ECHONET INF notifications, and `mat listen` in a loop for Matter
+    attribute changes via matd's resident Subscribe; `priming: true`
+    current-state redeliveries never fire rules)
   - Firing is dispatched asynchronously to per-device workers (FIFO per device, parallel across devices).
     `enl listen` does not stop even while an action is running. `--once` / `--listen-once` run synchronously.
   - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`
     (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`).
 - Subscription to ECHONET INF notifications (via `enl listen`; the enl side is designed so "listen is driven from an external loop") — **implemented**
+- Subscription to Matter attribute changes (via `mat listen`, a thin client to
+  `matd`'s resident Subscribe; requires a running `matd`) — **implemented**
 - HTTP / WebSocket / MCP server — not implemented (future)
 - Value caching and freshness management — not implemented (future)
 - Endpoint for Function Calling from an LLM — not implemented (future; rules.toml is assumed to be LLM / UI generated)

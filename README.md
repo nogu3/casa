@@ -188,7 +188,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 | Protocol | CLI | Assumed minimum version | Status |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
-| Matter | `mat` | `read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe` emit JSON to stdout | Supported |
+| Matter | `mat` | 1.0.0 (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`; casad event triggers additionally need `listen`, which requires a running `matd`) | Supported |
 | SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
 
 The enl interface that casa calls (it follows enl's shipped releases):
@@ -379,6 +379,13 @@ then = { action = "on", device = "bedroom_light" }
 name = "bedroom light off at 22:00"
 when = { at = "22:00" }
 then = { action = "off", device = "bedroom_light" }
+
+# Matter event trigger: when living_light's onoff attribute becomes true, ... (mat listen via matd).
+# equals is compared against the event's JSON value (number / bool / string).
+[[rules]]
+name = "example matter event trigger"
+when = { device = "living_light", attribute = "onoff", equals = true }
+then = { action = "on", device = "bedroom_light" }
 ```
 
 ```bash
@@ -393,11 +400,18 @@ casad run rules.toml --once --now 22:00
 
 # Debug: run enl listen exactly once to evaluate event triggers
 casad run rules.toml --listen-once
+
+# Debug: run mat listen exactly once to evaluate Matter event triggers
+casad run rules.toml --listen-once-mat
 ```
 
-Event triggers are realized by running enl's `listen` (waiting for INF
-notifications) in a loop. Binary resolution and stderr forwarding for enl follow
-the same conventions as casa (`CASA_ENL_BIN` / `[binaries]` / `PATH`).
+Event triggers are realized by running the child CLI's `listen` in a loop:
+`enl listen` (waiting for ECHONET INF notifications) for `epc` triggers, and
+`mat listen` (a thin client streaming matd's resident Subscribe; requires a
+running `matd`) for `attribute` triggers. Events with `priming: true` (matd's
+current-state redelivery on (re)subscribe) never fire rules. Binary resolution
+and stderr forwarding follow the same conventions as casa
+(`CASA_ENL_BIN` / `CASA_MAT_BIN` / `[binaries]` / `PATH`).
 
 ## Development
 
