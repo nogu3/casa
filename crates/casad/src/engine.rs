@@ -59,6 +59,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
                 .map(|t| (t.hour(), t.minute()) == now_hm)
                 .unwrap_or(false),
             Trigger::Event { .. } => false,
+            Trigger::MatterEvent { .. } => false,
         })
         .collect()
 }
