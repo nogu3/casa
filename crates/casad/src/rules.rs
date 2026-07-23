@@ -203,16 +203,17 @@ fn check_matter_device(config: &Config, rule_name: &str, device: &str) -> Result
                 return Err(CasaError::new(
                     ErrorKind::ConfigParse,
                     format!(
-                        "rule \"{rule_name}\": device \"{device}\" node_id \"{node_id}\" は数値でないnode_id"
+                        "rule \"{rule_name}\": device \"{device}\" node_id \"{node_id}\" is not numeric"
                     ),
                 ));
             }
             Ok(())
         }
-        _other => Err(CasaError::new(
+        other => Err(CasaError::new(
             ErrorKind::ProtocolUnsupported,
             format!(
-                "rule \"{rule_name}\": matter event trigger requires a matter device, but \"{device}\" is プロトコル不一致"
+                "rule \"{rule_name}\": matter event trigger requires a matter device, but \"{device}\" is {}",
+                other.protocol()
             ),
         )),
     }
