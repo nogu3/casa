@@ -42,6 +42,14 @@ pub enum Trigger {
         epc: String,
         equals: String,
     },
+    /// Matter イベント: あるデバイスの属性が指定値になったとき（mat listen 経由）。
+    /// 例: `when = { device = "study_motion", attribute = "occupancy", equals = 0 }`
+    /// equals は matd イベントの JSON `value` と等値比較する（数値 / bool / 文字列）。
+    MatterEvent {
+        device: String,
+        attribute: String,
+        equals: serde_json::Value,
+    },
     /// 時刻: 毎日その時刻（HH:MM）になったとき。
     /// 例: `when = { at = "22:00" }`
     Time { at: String },
@@ -145,6 +153,12 @@ pub fn load(path: &Path) -> Result<RuleFile, CasaError> {
     })
 }
 
+/// devices.toml の `node_id`（文字列）を数値へ。mat listen イベントの
+/// node_id（数値）との突合に使う。10 進のみ（mat の alias は不可）。
+pub(crate) fn parse_node_id(s: &str) -> Option<u64> {
+    s.trim().parse().ok()
+}
+
 impl RuleFile {
     /// 参照する名前がすべて config に存在するか検証する（発火前に弾く）。
     /// 未定義名は `name_not_found`（exit 11）。エラーにはルール名を添える。
@@ -155,8 +169,14 @@ impl RuleFile {
     /// グループ名も許可する（`check_target`。名前解決は casa 側が担う）。
     pub fn validate(&self, config: &Config) -> Result<(), CasaError> {
         for rule in &self.rules {
-            if let Trigger::Event { device, .. } = &rule.when {
-                check_device(config, &rule.name, device)?;
+            match &rule.when {
+                Trigger::Event { device, .. } => {
+                    check_device(config, &rule.name, device)?;
+                }
+                Trigger::MatterEvent { device, .. } => {
+                    check_matter_device(config, &rule.name, device)?;
+                }
+                Trigger::Time { .. } => {}
             }
             check_target(config, &rule.name, rule.then.device())?;
         }
@@ -169,6 +189,34 @@ fn check_device(config: &Config, rule_name: &str, device: &str) -> Result<(), Ca
         .device(device)
         .map(|_| ())
         .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))
+}
+
+/// Matter イベントトリガの発火元検証: 存在 + protocol=matter + node_id が数値。
+/// mat listen の通知と node_id で突き合わせるため、数値化できない設定は起動前に弾く。
+fn check_matter_device(config: &Config, rule_name: &str, device: &str) -> Result<(), CasaError> {
+    let dev = config
+        .device(device)
+        .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))?;
+    match dev {
+        casa_core::config::Device::Matter { node_id, .. } => {
+            if parse_node_id(node_id).is_none() {
+                return Err(CasaError::new(
+                    ErrorKind::ConfigParse,
+                    format!(
+                        "rule \"{rule_name}\": device \"{device}\" node_id \"{node_id}\" is not numeric"
+                    ),
+                ));
+            }
+            Ok(())
+        }
+        other => Err(CasaError::new(
+            ErrorKind::ProtocolUnsupported,
+            format!(
+                "rule \"{rule_name}\": matter event trigger requires a matter device, but \"{device}\" is {}",
+                other.protocol()
+            ),
+        )),
+    }
 }
 
 fn check_target(config: &Config, rule_name: &str, name: &str) -> Result<(), CasaError> {
@@ -380,5 +428,143 @@ then = { action = "on", device = "ghost_device" }
         let err = file.validate(&config_with_devices()).unwrap_err();
         assert_eq!(err.kind, ErrorKind::NameNotFound);
         assert!(err.detail.contains("未定義デバイス参照"));
+    }
+
+    #[test]
+    fn parses_matter_event_rule() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "書斎 人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].when {
+            Trigger::MatterEvent {
+                device,
+                attribute,
+                equals,
+            } => {
+                assert_eq!(device, "study_motion");
+                assert_eq!(attribute, "occupancy");
+                assert_eq!(equals, &serde_json::json!(0));
+            }
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matter_equals_accepts_bool_and_string() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "bool"
+when = { device = "d", attribute = "onoff", equals = true }
+then = { action = "on", device = "d" }
+[[rules]]
+name = "string"
+when = { device = "d", attribute = "mode", equals = "auto" }
+then = { action = "on", device = "d" }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].when {
+            Trigger::MatterEvent { equals, .. } => assert_eq!(equals, &serde_json::json!(true)),
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+        match &file.rules[1].when {
+            Trigger::MatterEvent { equals, .. } => assert_eq!(equals, &serde_json::json!("auto")),
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn echonet_event_rule_still_parses_as_event() {
+        // epc キーは従来どおり Event variant に落ちる（MatterEvent に吸われない）。
+        let file = parse(VALID).unwrap();
+        assert!(matches!(file.rules[0].when, Trigger::Event { .. }));
+    }
+
+    #[test]
+    fn parse_node_id_accepts_decimal_only() {
+        assert_eq!(parse_node_id("16"), Some(16));
+        assert_eq!(parse_node_id(" 16 "), Some(16));
+        assert_eq!(parse_node_id("0x10"), None);
+        assert_eq!(parse_node_id("study_motion"), None);
+    }
+
+    fn config_with_matter() -> Config {
+        casa_core::config::parse(
+            r#"
+version = 1
+[devices.study_motion]
+protocol = "matter"
+node_id = "16"
+[devices.desk_tape_light]
+protocol = "matter"
+node_id = "6"
+[devices.washstand_light]
+protocol = "echonet"
+ip = "192.0.2.11"
+eoj = "0x029101"
+[devices.alias_node]
+protocol = "matter"
+node_id = "not_a_number"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_accepts_matter_event_rule() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        file.validate(&config_with_matter()).unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_matter_trigger_on_echonet_device() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "プロトコル不一致"
+when = { device = "washstand_light", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&config_with_matter()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert!(err.detail.contains("プロトコル不一致"));
+    }
+
+    #[test]
+    fn validate_rejects_non_numeric_node_id_for_matter_trigger() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "数値でないnode_id"
+when = { device = "alias_node", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&config_with_matter()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("数値でないnode_id"));
     }
 }

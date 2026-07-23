@@ -114,3 +114,114 @@ fn listen_once_does_not_fire_on_value_mismatch() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+const MATTER_CONFIG: &str = r#"
+version = 1
+
+[devices.study_motion]
+protocol = "matter"
+node_id = "16"
+
+[devices.desk_tape_light]
+protocol = "matter"
+node_id = "6"
+"#;
+
+const MATTER_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "書斎 人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#;
+
+#[test]
+fn listen_once_mat_fires_matter_rule_via_casa() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), MATTER_RULES);
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // occupancy=0 が rule に一致し、casa に `off desk_tape_light` が渡る。
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("off desk_tape_light"), "stdout: {stdout}");
+}
+
+#[test]
+fn listen_once_mat_does_not_fire_on_priming() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), MATTER_RULES);
+
+    // priming（matd 再購読時の現在値再配達）は値が一致しても発火しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("CASAD_MAT_PRIMING", "true"),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("casa called"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn listen_once_mat_does_not_fire_on_value_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), MATTER_RULES);
+
+    // occupancy=1（在室）は「OFF で消灯」ルールに一致しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("CASAD_MAT_VALUE", "1"),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("casa called"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

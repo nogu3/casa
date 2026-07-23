@@ -15,8 +15,8 @@ use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
 use crate::dispatch::{distinct_devices, Dispatcher};
-use crate::rules::{Rule, RuleFile, Trigger};
-use crate::{casa_runner, enl};
+use crate::rules::{parse_node_id, Rule, RuleFile, Trigger};
+use crate::{casa_runner, enl, mat};
 
 /// `casad run` の挙動。
 pub struct RunOpts {
@@ -59,6 +59,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
                 .map(|t| (t.hour(), t.minute()) == now_hm)
                 .unwrap_or(false),
             Trigger::Event { .. } => false,
+            Trigger::MatterEvent { .. } => false,
         })
         .collect()
 }
@@ -147,6 +148,73 @@ pub fn drain_events_once(
     Ok(fire_due_events(file, config, &events, config_path))
 }
 
+/// Matter イベントトリガのルールが、与えられた mat listen イベント 1 件に一致するか。
+/// priming（matd 再購読時の現在値再配達）は状変ではないので無条件で不一致。
+pub fn matter_event_matches(rule: &Rule, config: &Config, event: &mat::Event) -> bool {
+    let Trigger::MatterEvent {
+        device,
+        attribute,
+        equals,
+    } = &rule.when
+    else {
+        return false;
+    };
+    if event.priming {
+        return false;
+    }
+    let (node_id, endpoint) = match config.device(device) {
+        Ok(Device::Matter { node_id, endpoint }) => (node_id, endpoint),
+        _ => return false,
+    };
+    if parse_node_id(node_id) != Some(event.node_id) {
+        return false;
+    }
+    if let Some(ep) = endpoint {
+        if u64::from(*ep) != event.endpoint {
+            return false;
+        }
+    }
+    attribute_matches(&event.attribute, attribute) && event.value == *equals
+}
+
+/// イベントの attribute（chip-tool 名 or 未知 ID の数値）とルールの属性名の突合。
+/// 名前は case-insensitive、数値はルール側の 10 進表記と比較する。
+fn attribute_matches(event_attr: &serde_json::Value, rule_attr: &str) -> bool {
+    match event_attr {
+        serde_json::Value::String(s) => s.eq_ignore_ascii_case(rule_attr),
+        serde_json::Value::Number(n) => rule_attr.trim().parse::<u64>().ok() == n.as_u64(),
+        _ => false,
+    }
+}
+
+/// 1 バッチの mat イベントに一致する Matter イベントトリガのルールを返す
+/// （rules.toml 記載順・重複なし）。
+fn due_matter_event_rules<'a>(
+    file: &'a RuleFile,
+    config: &Config,
+    events: &[mat::Event],
+) -> Vec<&'a Rule> {
+    file.rules
+        .iter()
+        .filter(|r| matches!(r.when, Trigger::MatterEvent { .. }))
+        .filter(|r| events.iter().any(|e| matter_event_matches(r, config, e)))
+        .collect()
+}
+
+/// `mat listen` を 1 回起動し、得たイベントで Matter トリガを発火する。発火件数を返す。
+pub fn drain_matter_events_once(
+    file: &RuleFile,
+    config: &Config,
+    mat_bin: &str,
+    config_path: Option<&Path>,
+) -> Result<usize, CasaError> {
+    let events = mat::listen_once(mat_bin)?;
+    Ok(fire_all(
+        due_matter_event_rules(file, config, &events),
+        config_path,
+    ))
+}
+
 /// 1 ルールを実行し、成功（casa が exit 0）なら true。失敗は warn ログに残す。
 /// 同期経路（`fire_all`）と非同期ワーカー（dispatcher）の両方がこれを使う。
 fn run_one(rule: &Rule, config_path: Option<&Path>) -> bool {
@@ -173,12 +241,13 @@ fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
 }
 
 /// ルールエンジンを走らせる。`--once` は時刻 1 tick で終了、常駐は時刻スケジューラ
-/// （毎分 tick）と イベントリスナ（enl listen ループ）を並行に回す。
+/// （毎分 tick）と イベントリスナ（enl listen / mat listen ループ）を並行に回す。
 pub fn run(
     file: &RuleFile,
     config: &Config,
     config_path: Option<&Path>,
     enl_bin: &str,
+    mat_bin: &str,
     opts: RunOpts,
 ) -> Result<i32, CasaError> {
     if opts.once {
@@ -189,21 +258,29 @@ pub fn run(
     }
 
     tracing::info!("casad resident engine started (time + event)");
-    let has_events = file
+    let has_enl_events = file
         .rules
         .iter()
         .any(|r| matches!(r.when, Trigger::Event { .. }));
+    let has_matter_events = file
+        .rules
+        .iter()
+        .any(|r| matches!(r.when, Trigger::MatterEvent { .. }));
 
-    // scope で借用を渡し、Arc/clone なしに 2 ループ + ワーカー群を並行させる。
+    // scope で借用を渡し、Arc/clone なしにループ群 + ワーカー群を並行させる。
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
     // 異デバイス並列）。listen / tick ループはアクション完了を待たない。
     std::thread::scope(|s| {
         let dispatcher = Dispatcher::new(s, distinct_devices(file), move |rule: &Rule| {
             run_one(rule, config_path);
         });
-        if has_events {
+        if has_enl_events {
             let d = dispatcher.clone();
             s.spawn(move || event_loop(file, config, enl_bin, &d));
+        }
+        if has_matter_events {
+            let d = dispatcher.clone();
+            s.spawn(move || matter_event_loop(file, config, mat_bin, &d));
         }
         time_loop(file, &dispatcher);
     });
@@ -240,6 +317,30 @@ fn event_loop<'env>(
             }
             Err(e) => {
                 tracing::warn!(error = %e, "enl listen failed; backing off");
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+    }
+}
+
+/// Matter イベントリスナ。`mat listen` を回し続け、一致ルールをワーカーに積んで
+/// 即再 listen する。mat 起動失敗・matd 不在（exit 13）はバックオフして再試行。
+fn matter_event_loop<'env>(
+    file: &'env RuleFile,
+    config: &Config,
+    mat_bin: &str,
+    dispatcher: &Dispatcher<'env>,
+) -> ! {
+    loop {
+        match mat::listen_once(mat_bin) {
+            Ok(events) => {
+                let queued = dispatcher.dispatch_all(due_matter_event_rules(file, config, &events));
+                if queued > 0 {
+                    tracing::debug!(queued, "matter event rules queued");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "mat listen failed; backing off");
                 std::thread::sleep(Duration::from_secs(5));
             }
         }
@@ -412,5 +513,176 @@ then = { action = "on", device = "living_aircon" }
         let err = validate_schedule(&file).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
         assert!(err.detail.contains("壊れた時刻"));
+    }
+
+    fn config_matter() -> Config {
+        casa_core::config::parse(
+            r#"
+version = 1
+[devices.study_motion]
+protocol = "matter"
+node_id = "16"
+[devices.desk_tape_light]
+protocol = "matter"
+node_id = "6"
+[devices.outlet2]
+protocol = "matter"
+node_id = "5678"
+endpoint = 2
+"#,
+        )
+        .unwrap()
+    }
+
+    fn mat_event(
+        node_id: u64,
+        endpoint: u64,
+        attribute: &str,
+        value: serde_json::Value,
+    ) -> mat::Event {
+        mat::Event {
+            node_id,
+            endpoint,
+            cluster: serde_json::json!("occupancysensing"),
+            attribute: serde_json::json!(attribute),
+            value,
+            priming: false,
+        }
+    }
+
+    const MATTER_RULE: &str = r#"
+version = 1
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#;
+
+    #[test]
+    fn matter_event_matches_on_node_attribute_value() {
+        let file = rules(MATTER_RULE);
+        let cfg = config_matter();
+        let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
+        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn matter_event_attribute_is_case_insensitive() {
+        let file = rules(MATTER_RULE);
+        let cfg = config_matter();
+        let ev = mat_event(16, 1, "Occupancy", serde_json::json!(0));
+        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn matter_event_does_not_match_on_mismatch() {
+        let file = rules(MATTER_RULE);
+        let cfg = config_matter();
+        // node_id 違い。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(6, 1, "occupancy", serde_json::json!(0))
+        ));
+        // attribute 違い。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(16, 1, "onoff", serde_json::json!(0))
+        ));
+        // 値違い（在室 ON）。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(16, 1, "occupancy", serde_json::json!(1))
+        ));
+        // 型違い（数値 0 vs 文字列 "0"）。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(16, 1, "occupancy", serde_json::json!("0"))
+        ));
+    }
+
+    #[test]
+    fn matter_event_priming_never_matches() {
+        let file = rules(MATTER_RULE);
+        let cfg = config_matter();
+        let mut ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
+        ev.priming = true;
+        // matd 再購読時の現在値再配達で発火してはならない。
+        assert!(!matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn matter_event_endpoint_filter_applies_only_when_configured() {
+        let cfg = config_matter();
+        // endpoint = 2 を持つ outlet2 のルール: endpoint 一致のみマッチ。
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "outlet2"
+when = { device = "outlet2", attribute = "onoff", equals = true }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        );
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(5678, 2, "onoff", serde_json::json!(true))
+        ));
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(5678, 1, "onoff", serde_json::json!(true))
+        ));
+        // study_motion は endpoint 未指定なのでどの endpoint でもマッチ。
+        let file = rules(MATTER_RULE);
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_event(16, 3, "occupancy", serde_json::json!(0))
+        ));
+    }
+
+    #[test]
+    fn matter_numeric_attribute_matches_numeric_rule() {
+        // matd は ids テーブルに無い属性を数値のまま流す。ルール側も数値文字列で書けば突合できる。
+        let cfg = config_matter();
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "数値属性"
+when = { device = "study_motion", attribute = "0", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        );
+        let mut ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
+        ev.attribute = serde_json::json!(0);
+        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn due_matter_event_rules_ignores_echonet_and_time_rules() {
+        let cfg = config_matter();
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "時刻"
+when = { at = "22:00" }
+then = { action = "off", device = "desk_tape_light" }
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        );
+        let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
+        let due = due_matter_event_rules(&file, &cfg, &[ev]);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].name, "人感OFFで消灯");
     }
 }

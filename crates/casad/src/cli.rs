@@ -55,6 +55,10 @@ pub enum Command {
         /// （デバッグ用。通知が来るまでブロックする）。
         #[arg(long, conflicts_with = "once")]
         listen_once: bool,
+        /// mat listen を 1 回だけ起動し、得たイベントで Matter トリガを評価して終了する
+        /// （デバッグ用。イベントが来るまでブロックする）。
+        #[arg(long, conflicts_with_all = ["once", "listen_once"])]
+        listen_once_mat: bool,
     },
 }
 
