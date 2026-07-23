@@ -3,6 +3,7 @@ mod cli;
 mod dispatch;
 mod engine;
 mod enl;
+mod mat;
 mod rules;
 
 use clap::Parser;
@@ -66,6 +67,7 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             once,
             now,
             listen_once,
+            listen_once_mat,
         } => {
             // run も check と同じ検証を通してから起動する（不正ルールで常駐させない）。
             let config = config::load(cli.config.as_deref())?;
@@ -73,8 +75,9 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             rule_file.validate(&config)?;
             engine::validate_schedule(&rule_file)?;
 
-            // enl バイナリは casa と同じ規約（CASA_ENL_BIN / [binaries] / PATH）で解決する。
+            // 子 CLI は casa と同じ規約（CASA_<BIN>_BIN / [binaries] / PATH）で解決する。
             let enl_bin = casa_core::runner::resolve_bin("enl", &config);
+            let mat_bin = casa_core::runner::resolve_bin("mat", &config);
 
             if listen_once {
                 // イベント側のデバッグ経路: enl listen を 1 回回して評価し終了する。
@@ -87,6 +90,17 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
                 tracing::info!(fired, "single event drain complete");
                 return Ok(0);
             }
+            if listen_once_mat {
+                // Matter イベント側のデバッグ経路: mat listen を 1 回回して評価し終了する。
+                let fired = engine::drain_matter_events_once(
+                    &rule_file,
+                    &config,
+                    &mat_bin,
+                    cli.config.as_deref(),
+                )?;
+                tracing::info!(fired, "single matter event drain complete");
+                return Ok(0);
+            }
 
             let now = now.map(|s| engine::parse_hm(&s)).transpose()?;
             engine::run(
@@ -94,6 +108,7 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
                 &config,
                 cli.config.as_deref(),
                 &enl_bin,
+                &mat_bin,
                 engine::RunOpts { once, now },
             )
         }
