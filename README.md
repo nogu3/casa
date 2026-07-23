@@ -380,12 +380,11 @@ name = "bedroom light off at 22:00"
 when = { at = "22:00" }
 then = { action = "off", device = "bedroom_light" }
 
-# Matter event trigger: when living_light's onoff attribute becomes true, ... (mat listen via matd).
-# equals is compared against the event's JSON value (number / bool / string).
+# Matter event trigger: when study_motion's occupancy becomes 0 (vacant), turn off the desk light
 [[rules]]
-name = "example matter event trigger"
-when = { device = "living_light", attribute = "onoff", equals = true }
-then = { action = "on", device = "bedroom_light" }
+name = "desk light off when study becomes vacant"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
 ```
 
 ```bash
