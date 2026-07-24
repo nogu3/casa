@@ -77,8 +77,9 @@ pub fn fire(job: Job<'_>, config_path: Option<&Path>) -> Result<i32, CasaError> 
     casa_runner::run_casa(&args)
 }
 
-/// now に発火すべき時刻ルールをすべて実行する。発火した件数を返す。
-/// 個々のアクション失敗はループを止めず warn ログに残す（常駐の頑健性）。
+/// now に発火すべき時刻ルールのアクションをすべて実行する。成功したアクション数を
+/// 返す（ルール数ではない）。個々のアクション失敗はループを止めず warn ログに残す
+/// （常駐の頑健性）。
 pub fn tick(file: &RuleFile, now: NaiveTime, config_path: Option<&Path>) -> usize {
     fire_all(due_time_rules(file, now), config_path)
 }
@@ -131,8 +132,8 @@ fn due_event_rules<'a>(
         .collect()
 }
 
-/// 1 バッチの通知に対し、一致するイベントトリガを同期・直列に発火する
-/// （`--listen-once` 用）。発火した件数を返す。
+/// 1 バッチの通知に対し、一致するイベントトリガのアクションを同期・直列に発火する
+/// （`--listen-once` 用）。成功したアクション数を返す（ルール数ではない）。
 pub fn fire_due_events(
     file: &RuleFile,
     config: &Config,
@@ -142,7 +143,8 @@ pub fn fire_due_events(
     fire_all(due_event_rules(file, config, events), config_path)
 }
 
-/// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。発火件数を返す。
+/// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。成功した
+/// アクション数を返す（ルール数ではない）。
 pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
@@ -206,7 +208,8 @@ fn due_matter_event_rules<'a>(
         .collect()
 }
 
-/// `mat listen` を 1 回起動し、得たイベントで Matter トリガを発火する。発火件数を返す。
+/// `mat listen` を 1 回起動し、得たイベントで Matter トリガを発火する。成功した
+/// アクション数を返す（ルール数ではない）。
 pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
@@ -329,7 +332,7 @@ fn time_loop<'env>(file: &'env RuleFile, dispatcher: &Dispatcher<'env>) -> ! {
         let now = Local::now().time();
         let queued = dispatcher.dispatch_all(due_time_rules(file, now));
         if queued > 0 {
-            tracing::debug!(queued, "time rules queued");
+            tracing::debug!(queued, "time rule actions queued");
         }
         sleep_to_next_minute();
     }
@@ -348,7 +351,7 @@ fn event_loop<'env>(
             Ok(events) => {
                 let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events));
                 if queued > 0 {
-                    tracing::debug!(queued, "event rules queued");
+                    tracing::debug!(queued, "event rule actions queued");
                 }
             }
             Err(e) => {
@@ -372,7 +375,7 @@ fn matter_event_loop<'env>(
             Ok(events) => {
                 let queued = dispatcher.dispatch_all(due_matter_event_rules(file, config, &events));
                 if queued > 0 {
-                    tracing::debug!(queued, "matter event rules queued");
+                    tracing::debug!(queued, "matter event rule actions queued");
                 }
             }
             Err(e) => {
@@ -755,7 +758,10 @@ then = [
         let due: Vec<&Rule> = file.rules.iter().collect();
         let attempted = std::sync::Mutex::new(Vec::new());
         let ok = fire_jobs(jobs(&due), |job| {
-            attempted.lock().unwrap().push(job.then.device().to_string());
+            attempted
+                .lock()
+                .unwrap()
+                .push(job.then.device().to_string());
             // 2 番目（invoke）だけ失敗させる。
             !matches!(job.then, Then::Invoke { .. })
         });

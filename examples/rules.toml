@@ -26,7 +26,7 @@ then = { action = "on", device = "bedroom_light" }
 # different-device actions run in parallel. `then = []` is a config error.
 [[rules]]
 name = "example multiple actions"
-when = { device = "living_light", attribute = "onoff", equals = true }
+when = { at = "07:00" }
 then = [
   { action = "on", device = "bedroom_light" },
   { action = "invoke", device = "bedroom_light", command = "color-temp", args = ["--kelvin", "2700"] },

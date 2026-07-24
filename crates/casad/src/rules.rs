@@ -4,8 +4,8 @@
 //! 確保する）。形式は devices.toml と揃えて TOML。デバイス参照は casa-core の Config で
 //! 読込時に検証し、発火前に不正なルールを弾く（ハイブリッド構成の link 側の価値）。
 //!
-//! 中身は `when`（トリガ）→ `then`（アクション）の素朴な対応。複数条件・遅延・複数
-//! アクションなどの表現力拡張は後段で必要になったら足す。
+//! 中身は `when`（トリガ）→ `then`（アクション）の素朴な対応。複数条件・遅延などの
+//! 表現力拡張は後段で必要になったら足す。
 
 use std::path::Path;
 
@@ -31,17 +31,46 @@ pub struct Rule {
     pub then: Thens,
 }
 
-/// 1 ルールのアクション列。TOML では単一テーブルと配列の両方を受ける（untagged）。
+/// 1 ルールのアクション列。TOML では単一テーブルと配列の両方を受ける。
 /// - `then = { action = "on", device = "a" }`
 /// - `then = [{ action = "on", device = "a" }, { action = "on", device = "b" }]`
 ///
 /// 呼び出し側は本 enum を直接 match せず、必ず [`Thens::actions`] を経由する
 /// （単一形 / 配列形の非対称を呼び出し側に漏らさないため）。
-#[derive(Debug, Deserialize, Serialize)]
+///
+/// `Deserialize` は手書き（下記 `impl`）。`#[serde(untagged)]` derive のままだと
+/// 中身（`Then`）が variant に一致しない場合のエラーが
+/// 「data did not match any variant of untagged enum Thens」に潰れ、内側の
+/// `unknown variant` / `missing field` を握り潰してしまう。rules.toml の書き手は
+/// LLM / UI（本ファイル冒頭コメント）で、内側のエラーが直す手がかりそのものなので、
+/// TOML の形（テーブル/配列）で先に分岐し、内側のエラーをそのまま伝播させる。
+/// `Serialize` は形（単一 = オブジェクト、複数 = 配列）をそのまま出したいので
+/// `#[serde(untagged)]` を残す（`casad check` の JSON 出力の後方互換）。
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Thens {
     One(Then),
     Many(Vec<Then>),
+}
+
+impl<'de> Deserialize<'de> for Thens {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Thens;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an action table or an array of action tables")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, m: A) -> Result<Thens, A::Error> {
+                Then::deserialize(serde::de::value::MapAccessDeserializer::new(m)).map(Thens::One)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, s: A) -> Result<Thens, A::Error> {
+                Vec::<Then>::deserialize(serde::de::value::SeqAccessDeserializer::new(s))
+                    .map(Thens::Many)
+            }
+        }
+        d.deserialize_any(V)
+    }
 }
 
 impl Thens {
@@ -714,20 +743,8 @@ then = [
 
     #[test]
     fn action_name_matches_the_toml_action_value() {
-        assert_eq!(
-            Then::On {
-                device: "a".into()
-            }
-            .action_name(),
-            "on"
-        );
-        assert_eq!(
-            Then::Off {
-                device: "a".into()
-            }
-            .action_name(),
-            "off"
-        );
+        assert_eq!(Then::On { device: "a".into() }.action_name(), "on");
+        assert_eq!(Then::Off { device: "a".into() }.action_name(), "off");
         assert_eq!(
             Then::Invoke {
                 device: "a".into(),
@@ -742,7 +759,8 @@ then = [
     #[test]
     fn then_round_trips_through_json_preserving_shape() {
         // casad check は RuleFile をそのまま JSON 出力する。単一形はオブジェクト、
-        // 配列形は配列のまま出ること（既存出力の互換維持）。
+        // 配列形は配列のまま出ること（既存出力の互換維持）。形だけでなく中身
+        // （action / device の値、配列要素数）も検証する。
         let file = parse(
             r#"
 version = 1
@@ -753,12 +771,67 @@ then = { action = "on", device = "hallway_light" }
 [[rules]]
 name = "配列形"
 when = { at = "22:00" }
-then = [{ action = "off", device = "hallway_light" }]
+then = [
+  { action = "off", device = "hallway_light" },
+  { action = "on", device = "entry_motion" },
+]
 "#,
         )
         .unwrap();
         let json = serde_json::to_value(&file).unwrap();
-        assert!(json["rules"][0]["then"].is_object());
-        assert!(json["rules"][1]["then"].is_array());
+        let single = &json["rules"][0]["then"];
+        assert!(single.is_object());
+        assert_eq!(single["action"], "on");
+        assert_eq!(single["device"], "hallway_light");
+
+        let many = &json["rules"][1]["then"];
+        assert!(many.is_array());
+        assert_eq!(many.as_array().unwrap().len(), 2);
+        assert_eq!(many[0]["action"], "off");
+        assert_eq!(many[0]["device"], "hallway_light");
+        assert_eq!(many[1]["action"], "on");
+        assert_eq!(many[1]["device"], "entry_motion");
+    }
+
+    #[test]
+    fn invalid_action_name_keeps_the_inner_serde_error() {
+        // untagged derive に戻すと "data did not match any variant" になり、
+        // 書き手（LLM / UI）が直せなくなる。内側のエラーを保つことを守る。
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "typo"
+when = { at = "07:00" }
+then = { action = "onn", device = "hallway_light" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("unknown variant"),
+            "inner error should survive: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn missing_device_field_keeps_the_inner_serde_error() {
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "device なし"
+when = { at = "07:00" }
+then = { action = "on" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("missing field"),
+            "inner error should survive: {}",
+            err.detail
+        );
     }
 }

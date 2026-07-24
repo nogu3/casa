@@ -338,4 +338,18 @@ then = { action = "off", device = "desk_light" }
             drop(d);
         });
     }
+
+    #[test]
+    fn dispatch_all_sums_actions_across_multiple_multi_action_rules() {
+        // 複数の多アクションルールにまたがって積めた件数を合計できること
+        // （単一ルールの dispatch だけでは検証できない）。
+        let a = multi_rule("a", &["dev_a", "dev_b"]);
+        let b = multi_rule("b", &["dev_a", "dev_b", "no_such_device"]);
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a", "dev_b"], |_j: Job| {});
+            // a: 2 件とも積める。b: dev_a, dev_b は積めるが no_such_device は積めない → 2 件。
+            assert_eq!(d.dispatch_all(vec![&a, &b]), 4);
+            drop(d);
+        });
+    }
 }

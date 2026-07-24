@@ -403,6 +403,8 @@ action is dispatched to its target device's worker: actions aimed at the same
 device run in declaration order, actions aimed at different devices run in
 parallel. A failing action does not stop the remaining ones. Use a group
 (`[groups.x] members = [...]`) instead when every target takes the same action.
+`then = []` (an empty array) is a config error. Ordering is guaranteed within
+a single device's queue; actions from concurrently firing rules may interleave.
 
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON
