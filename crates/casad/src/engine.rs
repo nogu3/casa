@@ -14,7 +14,7 @@ use chrono::{Local, NaiveTime, Timelike};
 use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
-use crate::dispatch::{distinct_devices, Dispatcher};
+use crate::dispatch::{distinct_devices, Dispatcher, Job};
 use crate::rules::{parse_node_id, Rule, RuleFile, Trigger};
 use crate::{casa_runner, enl, mat};
 
@@ -64,16 +64,22 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
         .collect()
 }
 
-/// 1 つのルールの `then` を casa の spawn で実行する。
+/// 1 アクションを casa の spawn で実行する。
 /// `config_path` は casa へ渡す `--config`（None なら casa が既定パスを解決）。
-pub fn fire(rule: &Rule, config_path: Option<&Path>) -> Result<i32, CasaError> {
-    let args = rule.then.casa_args(config_path);
-    tracing::info!(rule = %rule.name, "firing rule");
+pub fn fire(job: Job<'_>, config_path: Option<&Path>) -> Result<i32, CasaError> {
+    let args = job.then.casa_args(config_path);
+    tracing::info!(
+        rule = %job.rule.name,
+        device = job.then.device(),
+        action = job.then.action_name(),
+        "firing rule"
+    );
     casa_runner::run_casa(&args)
 }
 
-/// now に発火すべき時刻ルールをすべて実行する。発火した件数を返す。
-/// 個々のアクション失敗はループを止めず warn ログに残す（常駐の頑健性）。
+/// now に発火すべき時刻ルールのアクションをすべて実行する。成功したアクション数を
+/// 返す（ルール数ではない）。個々のアクション失敗はループを止めず warn ログに残す
+/// （常駐の頑健性）。
 pub fn tick(file: &RuleFile, now: NaiveTime, config_path: Option<&Path>) -> usize {
     fire_all(due_time_rules(file, now), config_path)
 }
@@ -126,8 +132,8 @@ fn due_event_rules<'a>(
         .collect()
 }
 
-/// 1 バッチの通知に対し、一致するイベントトリガを同期・直列に発火する
-/// （`--listen-once` 用）。発火した件数を返す。
+/// 1 バッチの通知に対し、一致するイベントトリガのアクションを同期・直列に発火する
+/// （`--listen-once` 用）。成功したアクション数を返す（ルール数ではない）。
 pub fn fire_due_events(
     file: &RuleFile,
     config: &Config,
@@ -137,7 +143,8 @@ pub fn fire_due_events(
     fire_all(due_event_rules(file, config, events), config_path)
 }
 
-/// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。発火件数を返す。
+/// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。成功した
+/// アクション数を返す（ルール数ではない）。
 pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
@@ -201,7 +208,8 @@ fn due_matter_event_rules<'a>(
         .collect()
 }
 
-/// `mat listen` を 1 回起動し、得たイベントで Matter トリガを発火する。発火件数を返す。
+/// `mat listen` を 1 回起動し、得たイベントで Matter トリガを発火する。成功した
+/// アクション数を返す（ルール数ではない）。
 pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
@@ -215,29 +223,60 @@ pub fn drain_matter_events_once(
     ))
 }
 
-/// 1 ルールを実行し、成功（casa が exit 0）なら true。失敗は warn ログに残す。
+/// 1 アクションを実行し、成功（casa が exit 0）なら true。失敗は warn ログに残す。
 /// 同期経路（`fire_all`）と非同期ワーカー（dispatcher）の両方がこれを使う。
-fn run_one(rule: &Rule, config_path: Option<&Path>) -> bool {
-    match fire(rule, config_path) {
+fn run_one(job: Job<'_>, config_path: Option<&Path>) -> bool {
+    match fire(job, config_path) {
         Ok(0) => true,
         Ok(code) => {
-            tracing::warn!(rule = %rule.name, code, "rule action exited nonzero");
+            tracing::warn!(
+                rule = %job.rule.name,
+                device = job.then.device(),
+                action = job.then.action_name(),
+                code,
+                "rule action exited nonzero"
+            );
             false
         }
         Err(e) => {
-            tracing::warn!(rule = %rule.name, error = %e, "rule action failed");
+            tracing::warn!(
+                rule = %job.rule.name,
+                device = job.then.device(),
+                action = job.then.action_name(),
+                error = %e,
+                "rule action failed"
+            );
             false
         }
     }
 }
 
-/// 与えられたルール群を同期・直列にすべて発火する（`--once` / `--listen-once` 用）。
-/// 成功した件数を返す。失敗はループを止めない（常駐の頑健性）。
-fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
+/// ルール群を (ルール, アクション) の仕事列へ**記載順**に展開する。
+fn jobs<'a>(rules: &[&'a Rule]) -> Vec<Job<'a>> {
     rules
-        .into_iter()
-        .filter(|rule| run_one(rule, config_path))
-        .count()
+        .iter()
+        .copied()
+        .flat_map(|rule| {
+            rule.then
+                .actions()
+                .iter()
+                .map(move |then| Job { rule, then })
+        })
+        .collect()
+}
+
+/// 仕事列を同期・直列にすべて実行する。成功した件数を返す。
+/// 失敗はループを止めない（常駐の頑健性）。`run` は本番では [`run_one`]、
+/// テストでは記録クロージャを渡す。
+fn fire_jobs<'a, F: Fn(Job<'a>) -> bool>(jobs: Vec<Job<'a>>, run: F) -> usize {
+    jobs.into_iter().filter(|job| run(*job)).count()
+}
+
+/// 与えられたルール群のアクションを同期・直列にすべて発火する
+/// （`--once` / `--listen-once` / `--listen-once-mat` 用）。
+/// 成功した**アクション**数を返す（ルール数ではない）。
+fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
+    fire_jobs(jobs(&rules), |job| run_one(job, config_path))
 }
 
 /// ルールエンジンを走らせる。`--once` は時刻 1 tick で終了、常駐は時刻スケジューラ
@@ -271,8 +310,8 @@ pub fn run(
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
     // 異デバイス並列）。listen / tick ループはアクション完了を待たない。
     std::thread::scope(|s| {
-        let dispatcher = Dispatcher::new(s, distinct_devices(file), move |rule: &Rule| {
-            run_one(rule, config_path);
+        let dispatcher = Dispatcher::new(s, distinct_devices(file), move |job: Job| {
+            run_one(job, config_path);
         });
         if has_enl_events {
             let d = dispatcher.clone();
@@ -293,7 +332,7 @@ fn time_loop<'env>(file: &'env RuleFile, dispatcher: &Dispatcher<'env>) -> ! {
         let now = Local::now().time();
         let queued = dispatcher.dispatch_all(due_time_rules(file, now));
         if queued > 0 {
-            tracing::debug!(queued, "time rules queued");
+            tracing::debug!(queued, "time rule actions queued");
         }
         sleep_to_next_minute();
     }
@@ -312,7 +351,7 @@ fn event_loop<'env>(
             Ok(events) => {
                 let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events));
                 if queued > 0 {
-                    tracing::debug!(queued, "event rules queued");
+                    tracing::debug!(queued, "event rule actions queued");
                 }
             }
             Err(e) => {
@@ -336,7 +375,7 @@ fn matter_event_loop<'env>(
             Ok(events) => {
                 let queued = dispatcher.dispatch_all(due_matter_event_rules(file, config, &events));
                 if queued > 0 {
-                    tracing::debug!(queued, "matter event rules queued");
+                    tracing::debug!(queued, "matter event rule actions queued");
                 }
             }
             Err(e) => {
@@ -356,6 +395,7 @@ fn sleep_to_next_minute() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::Then;
 
     fn rules(toml: &str) -> RuleFile {
         crate::rules::parse(toml).unwrap()
@@ -684,5 +724,53 @@ then = { action = "off", device = "desk_tape_light" }
         let due = due_matter_event_rules(&file, &cfg, &[ev]);
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].name, "人感OFFで消灯");
+    }
+
+    const MULTI: &str = r#"
+version = 1
+[[rules]]
+name = "まとめて点灯"
+when = { at = "07:00" }
+then = [
+  { action = "on", device = "living_aircon" },
+  { action = "invoke", device = "living_aircon", command = "color-temp", args = ["--kelvin", "2700"] },
+  { action = "on", device = "entry_lock" },
+]
+"#;
+
+    #[test]
+    fn jobs_expands_actions_in_declaration_order() {
+        let file = rules(MULTI);
+        let due: Vec<&Rule> = file.rules.iter().collect();
+        let jobs = jobs(&due);
+        assert_eq!(jobs.len(), 3);
+        assert_eq!(jobs[0].then.device(), "living_aircon");
+        assert!(matches!(jobs[0].then, Then::On { .. }));
+        assert!(matches!(jobs[1].then, Then::Invoke { .. }));
+        assert_eq!(jobs[2].then.device(), "entry_lock");
+        // ルール名は全 Job が持ち回る（発火ログ用）。
+        assert!(jobs.iter().all(|j| j.rule.name == "まとめて点灯"));
+    }
+
+    #[test]
+    fn fire_jobs_continues_after_a_failing_action() {
+        let file = rules(MULTI);
+        let due: Vec<&Rule> = file.rules.iter().collect();
+        let attempted = std::sync::Mutex::new(Vec::new());
+        let ok = fire_jobs(jobs(&due), |job| {
+            attempted
+                .lock()
+                .unwrap()
+                .push(job.then.device().to_string());
+            // 2 番目（invoke）だけ失敗させる。
+            !matches!(job.then, Then::Invoke { .. })
+        });
+        // 失敗しても後続は実行される。
+        assert_eq!(
+            *attempted.lock().unwrap(),
+            ["living_aircon", "living_aircon", "entry_lock"]
+        );
+        // 戻り値は成功したアクション数。
+        assert_eq!(ok, 2);
     }
 }

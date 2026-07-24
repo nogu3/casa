@@ -4,8 +4,8 @@
 //! 確保する）。形式は devices.toml と揃えて TOML。デバイス参照は casa-core の Config で
 //! 読込時に検証し、発火前に不正なルールを弾く（ハイブリッド構成の link 側の価値）。
 //!
-//! 中身は `when`（トリガ）→ `then`（アクション）の素朴な対応。複数条件・遅延・複数
-//! アクションなどの表現力拡張は後段で必要になったら足す。
+//! 中身は `when`（トリガ）→ `then`（アクション）の素朴な対応。複数条件・遅延などの
+//! 表現力拡張は後段で必要になったら足す。
 
 use std::path::Path;
 
@@ -28,7 +28,59 @@ pub struct RuleFile {
 pub struct Rule {
     pub name: String,
     pub when: Trigger,
-    pub then: Then,
+    pub then: Thens,
+}
+
+/// 1 ルールのアクション列。TOML では単一テーブルと配列の両方を受ける。
+/// - `then = { action = "on", device = "a" }`
+/// - `then = [{ action = "on", device = "a" }, { action = "on", device = "b" }]`
+///
+/// 呼び出し側は本 enum を直接 match せず、必ず [`Thens::actions`] を経由する
+/// （単一形 / 配列形の非対称を呼び出し側に漏らさないため）。
+///
+/// `Deserialize` は手書き（下記 `impl`）。`#[serde(untagged)]` derive のままだと
+/// 中身（`Then`）が variant に一致しない場合のエラーが
+/// 「data did not match any variant of untagged enum Thens」に潰れ、内側の
+/// `unknown variant` / `missing field` を握り潰してしまう。rules.toml の書き手は
+/// LLM / UI（本ファイル冒頭コメント）で、内側のエラーが直す手がかりそのものなので、
+/// TOML の形（テーブル/配列）で先に分岐し、内側のエラーをそのまま伝播させる。
+/// `Serialize` は形（単一 = オブジェクト、複数 = 配列）をそのまま出したいので
+/// `#[serde(untagged)]` を残す（`casad check` の JSON 出力の後方互換）。
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Thens {
+    One(Then),
+    Many(Vec<Then>),
+}
+
+impl<'de> Deserialize<'de> for Thens {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = Thens;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an action table or an array of action tables")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, m: A) -> Result<Thens, A::Error> {
+                Then::deserialize(serde::de::value::MapAccessDeserializer::new(m)).map(Thens::One)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, s: A) -> Result<Thens, A::Error> {
+                Vec::<Then>::deserialize(serde::de::value::SeqAccessDeserializer::new(s))
+                    .map(Thens::Many)
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+impl Thens {
+    /// 記載順のアクション列。単一形は 1 要素のスライスとして見せる。
+    pub fn actions(&self) -> &[Then] {
+        match self {
+            Thens::One(t) => std::slice::from_ref(t),
+            Thens::Many(v) => v,
+        }
+    }
 }
 
 /// トリガ。TOML ではインラインテーブルで、含まれるキーで種別が決まる（untagged）。
@@ -83,6 +135,15 @@ impl Then {
         }
     }
 
+    /// ログ用のアクション種別名。TOML の `action` の値と一致させる。
+    pub fn action_name(&self) -> &'static str {
+        match self {
+            Then::On { .. } => "on",
+            Then::Off { .. } => "off",
+            Then::Invoke { .. } => "invoke",
+        }
+    }
+
     /// casa の引数列へ変換する。casa の CLI 表面に対する casad の知識はここに閉じる。
     /// `--config` は casa の clap グローバルフラグとしてサブコマンドより**前**に置く
     /// （invoke の trailing 引数に呑まれないため。on/off も並びを揃える）。
@@ -126,6 +187,16 @@ pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
             ),
         ));
     }
+
+    for rule in &file.rules {
+        if rule.then.actions().is_empty() {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!("rule \"{}\": then is empty", rule.name),
+            ));
+        }
+    }
+
     Ok(file)
 }
 
@@ -178,7 +249,9 @@ impl RuleFile {
                 }
                 Trigger::Time { .. } => {}
             }
-            check_target(config, &rule.name, rule.then.device())?;
+            for then in rule.then.actions() {
+                check_target(config, &rule.name, then.device())?;
+            }
         }
         Ok(())
     }
@@ -266,7 +339,7 @@ eoj = "0x029001"
         assert_eq!(file.rules.len(), 2);
         assert!(matches!(file.rules[0].when, Trigger::Event { .. }));
         assert!(matches!(file.rules[1].when, Trigger::Time { .. }));
-        assert!(matches!(file.rules[0].then, Then::On { .. }));
+        assert!(matches!(file.rules[0].then.actions()[0], Then::On { .. }));
     }
 
     #[test]
@@ -281,7 +354,7 @@ then = { action = "invoke", device = "hallway_light", command = "color-temp", ar
 "#,
         )
         .unwrap();
-        match &file.rules[0].then {
+        match &file.rules[0].then.actions()[0] {
             Then::Invoke {
                 device,
                 command,
@@ -307,7 +380,7 @@ then = { action = "invoke", device = "hallway_light", command = "blink" }
 "#,
         )
         .unwrap();
-        match &file.rules[0].then {
+        match &file.rules[0].then.actions()[0] {
             Then::Invoke { args, .. } => assert!(args.is_empty()),
             other => panic!("unexpected then: {other:?}"),
         }
@@ -566,5 +639,199 @@ then = { action = "off", device = "desk_tape_light" }
         let err = file.validate(&config_with_matter()).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
         assert!(err.detail.contains("数値でないnode_id"));
+    }
+
+    #[test]
+    fn parses_then_array_in_declaration_order() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "人感ONでまとめて点灯"
+when = { at = "18:00" }
+then = [
+  { action = "on", device = "hallway_light" },
+  { action = "invoke", device = "hallway_light", command = "color-temp", args = ["--kelvin", "2700"] },
+  { action = "off", device = "entry_motion" },
+]
+"#,
+        )
+        .unwrap();
+        let actions = file.rules[0].then.actions();
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], Then::On { .. }));
+        assert!(matches!(actions[1], Then::Invoke { .. }));
+        assert!(matches!(actions[2], Then::Off { .. }));
+        assert_eq!(actions[0].device(), "hallway_light");
+        assert_eq!(actions[2].device(), "entry_motion");
+    }
+
+    #[test]
+    fn single_then_table_yields_one_action() {
+        let file = parse(VALID).unwrap();
+        let actions = file.rules[0].then.actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Then::On { .. }));
+    }
+
+    #[test]
+    fn single_and_array_forms_can_coexist_in_one_file() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "単一形"
+when = { at = "07:00" }
+then = { action = "on", device = "hallway_light" }
+[[rules]]
+name = "配列形"
+when = { at = "22:00" }
+then = [
+  { action = "off", device = "hallway_light" },
+  { action = "off", device = "entry_motion" },
+]
+"#,
+        )
+        .unwrap();
+        assert_eq!(file.rules[0].then.actions().len(), 1);
+        assert_eq!(file.rules[1].then.actions().len(), 2);
+    }
+
+    #[test]
+    fn empty_then_array_is_config_parse_error_naming_the_rule() {
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "空のthen"
+when = { at = "07:00" }
+then = []
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("空のthen"),
+            "detail should name the rule: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn undefined_device_anywhere_in_then_array_fails_validation() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "2番目が未定義"
+when = { at = "07:00" }
+then = [
+  { action = "on", device = "hallway_light" },
+  { action = "on", device = "no_such_device" },
+]
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&config_with_devices()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NameNotFound);
+        assert!(
+            err.detail.contains("2番目が未定義") && err.detail.contains("no_such_device"),
+            "detail should name rule and device: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn action_name_matches_the_toml_action_value() {
+        assert_eq!(Then::On { device: "a".into() }.action_name(), "on");
+        assert_eq!(Then::Off { device: "a".into() }.action_name(), "off");
+        assert_eq!(
+            Then::Invoke {
+                device: "a".into(),
+                command: "blink".into(),
+                args: vec![],
+            }
+            .action_name(),
+            "invoke"
+        );
+    }
+
+    #[test]
+    fn then_round_trips_through_json_preserving_shape() {
+        // casad check は RuleFile をそのまま JSON 出力する。単一形はオブジェクト、
+        // 配列形は配列のまま出ること（既存出力の互換維持）。形だけでなく中身
+        // （action / device の値、配列要素数）も検証する。
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "単一形"
+when = { at = "07:00" }
+then = { action = "on", device = "hallway_light" }
+[[rules]]
+name = "配列形"
+when = { at = "22:00" }
+then = [
+  { action = "off", device = "hallway_light" },
+  { action = "on", device = "entry_motion" },
+]
+"#,
+        )
+        .unwrap();
+        let json = serde_json::to_value(&file).unwrap();
+        let single = &json["rules"][0]["then"];
+        assert!(single.is_object());
+        assert_eq!(single["action"], "on");
+        assert_eq!(single["device"], "hallway_light");
+
+        let many = &json["rules"][1]["then"];
+        assert!(many.is_array());
+        assert_eq!(many.as_array().unwrap().len(), 2);
+        assert_eq!(many[0]["action"], "off");
+        assert_eq!(many[0]["device"], "hallway_light");
+        assert_eq!(many[1]["action"], "on");
+        assert_eq!(many[1]["device"], "entry_motion");
+    }
+
+    #[test]
+    fn invalid_action_name_keeps_the_inner_serde_error() {
+        // untagged derive に戻すと "data did not match any variant" になり、
+        // 書き手（LLM / UI）が直せなくなる。内側のエラーを保つことを守る。
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "typo"
+when = { at = "07:00" }
+then = { action = "onn", device = "hallway_light" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("unknown variant"),
+            "inner error should survive: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn missing_device_field_keeps_the_inner_serde_error() {
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "device なし"
+when = { at = "07:00" }
+then = { action = "on" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("missing field"),
+            "inner error should survive: {}",
+            err.detail
+        );
     }
 }

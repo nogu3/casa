@@ -215,7 +215,9 @@ Web page / LLM / other client
   - Firing is dispatched asynchronously to per-device workers (FIFO per device, parallel across devices).
     `enl listen` does not stop even while an action is running. `--once` / `--listen-once` run synchronously.
   - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`
-    (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`).
+    (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`). `then` accepts either a
+    single table or an array of actions; array members are dispatched per target device (same device = declaration
+    order, different devices = parallel), and a failing action does not stop the rest.
 - Subscription to ECHONET INF notifications (via `enl listen`; the enl side is designed so "listen is driven from an external loop") — **implemented**
 - Subscription to Matter attribute changes (via `mat listen`, a thin client to
   `matd`'s resident Subscribe; requires a running `matd`) — **implemented**
