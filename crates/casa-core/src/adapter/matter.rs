@@ -22,12 +22,46 @@ const BIN: &str = "mat";
 
 pub struct MatterAdapter;
 
-/// デバイス定義から (node_id, on/off 用エンドポイント) を取り出す。dispatch は
-/// `adapter_for` が variant で行うので、他 variant が来ることはない。
-fn address(device: &Device) -> Option<(&str, Option<u32>)> {
+/// Matter の addressing mode。node（unicast）か group（groupcast）。
+/// ロード時バリデーションでちょうど一方が保証されるので、両立/両欠落は来ない。
+enum MatterAddr<'a> {
+    Node {
+        node_id: &'a str,
+        endpoint: Option<u32>,
+    },
+    Group {
+        group: &'a str,
+        endpoint: Option<u32>,
+    },
+}
+
+fn address(device: &Device) -> Option<MatterAddr<'_>> {
     match device {
-        Device::Matter { node_id, endpoint } => Some((node_id, *endpoint)),
+        Device::Matter {
+            node_id: Some(node_id),
+            endpoint,
+            ..
+        } => Some(MatterAddr::Node {
+            node_id,
+            endpoint: *endpoint,
+        }),
+        Device::Matter {
+            group: Some(group),
+            endpoint,
+            ..
+        } => Some(MatterAddr::Group {
+            group,
+            endpoint: *endpoint,
+        }),
         _ => None,
+    }
+}
+
+/// `--endpoint <ep>` を（設定にあれば）末尾に足す。node/group 共通。
+fn push_endpoint(args: &mut Vec<String>, endpoint: Option<u32>) {
+    if let Some(ep) = endpoint {
+        args.push("--endpoint".to_string());
+        args.push(ep.to_string());
     }
 }
 
@@ -59,15 +93,19 @@ fn selector_flags(selector: &str) -> Option<Vec<String>> {
 
 impl Adapter for MatterAdapter {
     fn get(&self, device: &Device, property: &str) -> Option<Invocation> {
-        let (node, _) = address(device)?;
-        let mut args = vec!["read".to_string(), "--node".to_string(), node.to_string()];
+        let MatterAddr::Node { node_id, .. } = address(device)? else {
+            return None;
+        };
+        let mut args = vec!["read".to_string(), "--node".to_string(), node_id.to_string()];
         args.extend(selector_flags(property)?);
         Some(invocation(args))
     }
 
     fn set(&self, device: &Device, property: &str, value: &str) -> Option<Invocation> {
-        let (node, _) = address(device)?;
-        let mut args = vec!["write".to_string(), "--node".to_string(), node.to_string()];
+        let MatterAddr::Node { node_id, .. } = address(device)? else {
+            return None;
+        };
+        let mut args = vec!["write".to_string(), "--node".to_string(), node_id.to_string()];
         args.extend(selector_flags(property)?);
         args.push("--value".to_string());
         args.push(value.to_string());
@@ -75,36 +113,66 @@ impl Adapter for MatterAdapter {
     }
 
     fn describe(&self, device: &Device) -> Option<Invocation> {
-        let (node, _) = address(device)?;
+        let MatterAddr::Node { node_id, .. } = address(device)? else {
+            return None;
+        };
         Some(invocation(vec![
             "describe".to_string(),
             "--node".to_string(),
-            node.to_string(),
+            node_id.to_string(),
         ]))
     }
 
     fn power(&self, device: &Device, on: bool) -> Option<Invocation> {
-        let (node, endpoint) = address(device)?;
         let cmd = if on { "on" } else { "off" };
-        let mut args = vec![cmd.to_string(), "--node".to_string(), node.to_string()];
-        if let Some(ep) = endpoint {
-            args.push("--endpoint".to_string());
-            args.push(ep.to_string());
+        match address(device)? {
+            MatterAddr::Node { node_id, endpoint } => {
+                let mut args =
+                    vec![cmd.to_string(), "--node".to_string(), node_id.to_string()];
+                push_endpoint(&mut args, endpoint);
+                Some(invocation(args))
+            }
+            MatterAddr::Group { group, endpoint } => {
+                // groupcast: `mat group invoke --group <g> --cluster onoff --command on|off`
+                let mut args = vec![
+                    "group".to_string(),
+                    "invoke".to_string(),
+                    "--group".to_string(),
+                    group.to_string(),
+                    "--cluster".to_string(),
+                    "onoff".to_string(),
+                    "--command".to_string(),
+                    cmd.to_string(),
+                ];
+                push_endpoint(&mut args, endpoint);
+                Some(invocation(args))
+            }
         }
-        Some(invocation(args))
     }
 
-    /// endpoint は設定にあれば注入する（`power` と同じ流儀）。そのコマンドが
-    /// `--endpoint` を取らない場合は mat 側のエラーが exit code 伝播で見える。
+    /// endpoint は設定にあれば注入する（`power` と同じ流儀）。group では `mat group`
+    /// サブコマンドを 1 語 prepend し、`--group` を注入して残りを素通しする。
     fn invoke(&self, device: &Device, command: &str, args: &[String]) -> Option<Invocation> {
-        let (node, endpoint) = address(device)?;
-        let mut all = vec![command.to_string(), "--node".to_string(), node.to_string()];
-        if let Some(ep) = endpoint {
-            all.push("--endpoint".to_string());
-            all.push(ep.to_string());
+        match address(device)? {
+            MatterAddr::Node { node_id, endpoint } => {
+                let mut all =
+                    vec![command.to_string(), "--node".to_string(), node_id.to_string()];
+                push_endpoint(&mut all, endpoint);
+                all.extend(args.iter().cloned());
+                Some(invocation(all))
+            }
+            MatterAddr::Group { group, endpoint } => {
+                let mut all = vec![
+                    "group".to_string(),
+                    command.to_string(),
+                    "--group".to_string(),
+                    group.to_string(),
+                ];
+                push_endpoint(&mut all, endpoint);
+                all.extend(args.iter().cloned());
+                Some(invocation(all))
+            }
         }
-        all.extend(args.iter().cloned());
-        Some(invocation(all))
     }
 }
 
@@ -114,14 +182,16 @@ mod tests {
 
     fn device() -> Device {
         Device::Matter {
-            node_id: "1234".into(),
+            node_id: Some("1234".into()),
+            group: None,
             endpoint: None,
         }
     }
 
     fn device_on_endpoint(ep: u32) -> Device {
         Device::Matter {
-            node_id: "1234".into(),
+            node_id: Some("1234".into()),
+            group: None,
             endpoint: Some(ep),
         }
     }
@@ -247,5 +317,129 @@ mod tests {
                 "370"
             ]
         );
+    }
+
+    fn group_device() -> Device {
+        Device::Matter {
+            node_id: None,
+            group: Some("desk_room_lights".into()),
+            endpoint: None,
+        }
+    }
+
+    #[test]
+    fn group_power_on_builds_mat_group_invoke() {
+        let inv = MatterAdapter.power(&group_device(), true).unwrap();
+        assert_eq!(inv.bin, "mat");
+        assert_eq!(
+            args(&inv),
+            [
+                "group",
+                "invoke",
+                "--group",
+                "desk_room_lights",
+                "--cluster",
+                "onoff",
+                "--command",
+                "on"
+            ]
+        );
+    }
+
+    #[test]
+    fn group_power_off_builds_mat_group_invoke() {
+        let inv = MatterAdapter.power(&group_device(), false).unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "group",
+                "invoke",
+                "--group",
+                "desk_room_lights",
+                "--cluster",
+                "onoff",
+                "--command",
+                "off"
+            ]
+        );
+    }
+
+    #[test]
+    fn group_power_with_endpoint_passes_flag() {
+        let dev = Device::Matter {
+            node_id: None,
+            group: Some("desk_room_lights".into()),
+            endpoint: Some(2),
+        };
+        let inv = MatterAdapter.power(&dev, true).unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "group",
+                "invoke",
+                "--group",
+                "desk_room_lights",
+                "--cluster",
+                "onoff",
+                "--command",
+                "on",
+                "--endpoint",
+                "2"
+            ]
+        );
+    }
+
+    #[test]
+    fn group_invoke_shortcut_injects_group_and_passes_args() {
+        let extra: Vec<String> = vec!["--kelvin".into(), "2700".into()];
+        let inv = MatterAdapter
+            .invoke(&group_device(), "color-temp", &extra)
+            .unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "group",
+                "color-temp",
+                "--group",
+                "desk_room_lights",
+                "--kelvin",
+                "2700"
+            ]
+        );
+    }
+
+    #[test]
+    fn group_invoke_arbitrary_passes_through() {
+        let extra: Vec<String> = vec![
+            "--cluster".into(),
+            "onoff".into(),
+            "--command".into(),
+            "on".into(),
+        ];
+        let inv = MatterAdapter
+            .invoke(&group_device(), "invoke", &extra)
+            .unwrap();
+        assert_eq!(
+            args(&inv),
+            [
+                "group",
+                "invoke",
+                "--group",
+                "desk_room_lights",
+                "--cluster",
+                "onoff",
+                "--command",
+                "on"
+            ]
+        );
+    }
+
+    #[test]
+    fn group_get_set_describe_are_unsupported() {
+        assert!(MatterAdapter.get(&group_device(), "onoff/on-off").is_none());
+        assert!(MatterAdapter
+            .set(&group_device(), "onoff/on-off", "1")
+            .is_none());
+        assert!(MatterAdapter.describe(&group_device()).is_none());
     }
 }

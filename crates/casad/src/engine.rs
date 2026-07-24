@@ -170,7 +170,11 @@ pub fn matter_event_matches(rule: &Rule, config: &Config, event: &mat::Event) ->
         return false;
     }
     let (node_id, endpoint) = match config.device(device) {
-        Ok(Device::Matter { node_id, endpoint }) => (node_id, endpoint),
+        Ok(Device::Matter {
+            node_id: Some(node_id),
+            endpoint,
+            ..
+        }) => (node_id, endpoint),
         _ => return false,
     };
     if parse_node_id(node_id) != Some(event.node_id) {
