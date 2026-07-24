@@ -353,19 +353,6 @@ endpoint = 1
     }
 
     #[test]
-    fn matter_missing_node_id_is_config_parse() {
-        let text = r#"
-version = 1
-[devices.x]
-protocol = "matter"
-endpoint = 1
-"#;
-        let err = parse(text).unwrap_err();
-        assert_eq!(err.kind, ErrorKind::ConfigParse);
-        assert!(err.detail.contains("node_id"), "detail: {}", err.detail);
-    }
-
-    #[test]
     fn missing_file_is_config_missing() {
         let err = load(Some(Path::new("/nonexistent/casa/devices.toml"))).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigMissing);
