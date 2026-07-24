@@ -68,7 +68,12 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
 /// `config_path` は casa へ渡す `--config`（None なら casa が既定パスを解決）。
 pub fn fire(job: Job<'_>, config_path: Option<&Path>) -> Result<i32, CasaError> {
     let args = job.then.casa_args(config_path);
-    tracing::info!(rule = %job.rule.name, "firing rule");
+    tracing::info!(
+        rule = %job.rule.name,
+        device = job.then.device(),
+        action = job.then.action_name(),
+        "firing rule"
+    );
     casa_runner::run_casa(&args)
 }
 
@@ -221,11 +226,23 @@ fn run_one(job: Job<'_>, config_path: Option<&Path>) -> bool {
     match fire(job, config_path) {
         Ok(0) => true,
         Ok(code) => {
-            tracing::warn!(rule = %job.rule.name, code, "rule action exited nonzero");
+            tracing::warn!(
+                rule = %job.rule.name,
+                device = job.then.device(),
+                action = job.then.action_name(),
+                code,
+                "rule action exited nonzero"
+            );
             false
         }
         Err(e) => {
-            tracing::warn!(rule = %job.rule.name, error = %e, "rule action failed");
+            tracing::warn!(
+                rule = %job.rule.name,
+                device = job.then.device(),
+                action = job.then.action_name(),
+                error = %e,
+                "rule action failed"
+            );
             false
         }
     }

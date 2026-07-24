@@ -106,6 +106,15 @@ impl Then {
         }
     }
 
+    /// ログ用のアクション種別名。TOML の `action` の値と一致させる。
+    pub fn action_name(&self) -> &'static str {
+        match self {
+            Then::On { .. } => "on",
+            Then::Off { .. } => "off",
+            Then::Invoke { .. } => "invoke",
+        }
+    }
+
     /// casa の引数列へ変換する。casa の CLI 表面に対する casad の知識はここに閉じる。
     /// `--config` は casa の clap グローバルフラグとしてサブコマンドより**前**に置く
     /// （invoke の trailing 引数に呑まれないため。on/off も並びを揃える）。
@@ -700,6 +709,33 @@ then = [
             err.detail.contains("2番目が未定義") && err.detail.contains("no_such_device"),
             "detail should name rule and device: {}",
             err.detail
+        );
+    }
+
+    #[test]
+    fn action_name_matches_the_toml_action_value() {
+        assert_eq!(
+            Then::On {
+                device: "a".into()
+            }
+            .action_name(),
+            "on"
+        );
+        assert_eq!(
+            Then::Off {
+                device: "a".into()
+            }
+            .action_name(),
+            "off"
+        );
+        assert_eq!(
+            Then::Invoke {
+                device: "a".into(),
+                command: "blink".into(),
+                args: vec![],
+            }
+            .action_name(),
+            "invoke"
         );
     }
 
