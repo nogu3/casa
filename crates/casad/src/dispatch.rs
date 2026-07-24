@@ -15,9 +15,13 @@ use std::thread::Scope;
 
 use crate::rules::{Rule, RuleFile};
 
-/// rules.toml の `then.device` の distinct 集合（BTreeSet で順序決定的）。
+/// rules.toml の全 `then` アクションの対象名の distinct 集合（BTreeSet で順序決定的）。
 pub fn distinct_devices(file: &RuleFile) -> BTreeSet<&str> {
-    file.rules.iter().map(|r| r.then.device()).collect()
+    file.rules
+        .iter()
+        .flat_map(|r| r.then.actions())
+        .map(|t| t.device())
+        .collect()
 }
 
 /// デバイス名 → ワーカーへの送信口。clone して複数ループ（event / time）で共有する。
@@ -55,7 +59,13 @@ impl<'env> Dispatcher<'env> {
     /// 起動時に `then.device` 全件でワーカーを張るため、対応ワーカー無しは通常
     /// 到達しない防御分岐（warn して false）。
     pub fn dispatch(&self, rule: &'env Rule) -> bool {
-        let device = rule.then.device();
+        // TODO(Task 2): (ルール, アクション) 単位のファンアウトに置き換える。
+        // 現状は先頭アクションのみを積む（単一 then のルールでは従来と同じ挙動）。
+        let Some(then) = rule.then.actions().first() else {
+            tracing::warn!(rule = %rule.name, "rule has no action; dropping");
+            return false;
+        };
+        let device = then.device();
         let Some(tx) = self.senders.get(device) else {
             tracing::warn!(rule = %rule.name, device, "no worker for device; dropping action");
             return false;
@@ -84,7 +94,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use crate::rules::{Then, Trigger};
+    use crate::rules::{Then, Thens, Trigger};
 
     /// テスト用ルールを直接組む（フィールドは pub）。when は使われないので固定でよい。
     fn rule(name: &str, device: &str) -> Rule {
@@ -93,9 +103,9 @@ mod tests {
             when: Trigger::Time {
                 at: "00:00".to_string(),
             },
-            then: Then::On {
+            then: Thens::One(Then::On {
                 device: device.to_string(),
-            },
+            }),
         }
     }
 
@@ -171,7 +181,7 @@ then = { action = "off", device = "bedroom_light" }
         let done = Mutex::new(Vec::new());
         std::thread::scope(|s| {
             let d = Dispatcher::new(s, ["dev_a", "dev_b"], |r: &Rule| {
-                if r.then.device() == "dev_a" {
+                if r.then.actions()[0].device() == "dev_a" {
                     std::thread::sleep(Duration::from_millis(300));
                 }
                 done.lock().unwrap().push(r.name.clone());

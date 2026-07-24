@@ -28,7 +28,30 @@ pub struct RuleFile {
 pub struct Rule {
     pub name: String,
     pub when: Trigger,
-    pub then: Then,
+    pub then: Thens,
+}
+
+/// 1 ルールのアクション列。TOML では単一テーブルと配列の両方を受ける（untagged）。
+/// - `then = { action = "on", device = "a" }`
+/// - `then = [{ action = "on", device = "a" }, { action = "on", device = "b" }]`
+///
+/// 呼び出し側は本 enum を直接 match せず、必ず [`Thens::actions`] を経由する
+/// （単一形 / 配列形の非対称を呼び出し側に漏らさないため）。
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Thens {
+    One(Then),
+    Many(Vec<Then>),
+}
+
+impl Thens {
+    /// 記載順のアクション列。単一形は 1 要素のスライスとして見せる。
+    pub fn actions(&self) -> &[Then] {
+        match self {
+            Thens::One(t) => std::slice::from_ref(t),
+            Thens::Many(v) => v,
+        }
+    }
 }
 
 /// トリガ。TOML ではインラインテーブルで、含まれるキーで種別が決まる（untagged）。
@@ -126,6 +149,16 @@ pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
             ),
         ));
     }
+
+    for rule in &file.rules {
+        if rule.then.actions().is_empty() {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!("rule \"{}\": then is empty", rule.name),
+            ));
+        }
+    }
+
     Ok(file)
 }
 
@@ -178,7 +211,9 @@ impl RuleFile {
                 }
                 Trigger::Time { .. } => {}
             }
-            check_target(config, &rule.name, rule.then.device())?;
+            for then in rule.then.actions() {
+                check_target(config, &rule.name, then.device())?;
+            }
         }
         Ok(())
     }
@@ -266,7 +301,7 @@ eoj = "0x029001"
         assert_eq!(file.rules.len(), 2);
         assert!(matches!(file.rules[0].when, Trigger::Event { .. }));
         assert!(matches!(file.rules[1].when, Trigger::Time { .. }));
-        assert!(matches!(file.rules[0].then, Then::On { .. }));
+        assert!(matches!(file.rules[0].then.actions()[0], Then::On { .. }));
     }
 
     #[test]
@@ -281,7 +316,7 @@ then = { action = "invoke", device = "hallway_light", command = "color-temp", ar
 "#,
         )
         .unwrap();
-        match &file.rules[0].then {
+        match &file.rules[0].then.actions()[0] {
             Then::Invoke {
                 device,
                 command,
@@ -307,7 +342,7 @@ then = { action = "invoke", device = "hallway_light", command = "blink" }
 "#,
         )
         .unwrap();
-        match &file.rules[0].then {
+        match &file.rules[0].then.actions()[0] {
             Then::Invoke { args, .. } => assert!(args.is_empty()),
             other => panic!("unexpected then: {other:?}"),
         }
@@ -566,5 +601,128 @@ then = { action = "off", device = "desk_tape_light" }
         let err = file.validate(&config_with_matter()).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
         assert!(err.detail.contains("数値でないnode_id"));
+    }
+
+    #[test]
+    fn parses_then_array_in_declaration_order() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "人感ONでまとめて点灯"
+when = { at = "18:00" }
+then = [
+  { action = "on", device = "hallway_light" },
+  { action = "invoke", device = "hallway_light", command = "color-temp", args = ["--kelvin", "2700"] },
+  { action = "off", device = "entry_motion" },
+]
+"#,
+        )
+        .unwrap();
+        let actions = file.rules[0].then.actions();
+        assert_eq!(actions.len(), 3);
+        assert!(matches!(actions[0], Then::On { .. }));
+        assert!(matches!(actions[1], Then::Invoke { .. }));
+        assert!(matches!(actions[2], Then::Off { .. }));
+        assert_eq!(actions[0].device(), "hallway_light");
+        assert_eq!(actions[2].device(), "entry_motion");
+    }
+
+    #[test]
+    fn single_then_table_yields_one_action() {
+        let file = parse(VALID).unwrap();
+        let actions = file.rules[0].then.actions();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Then::On { .. }));
+    }
+
+    #[test]
+    fn single_and_array_forms_can_coexist_in_one_file() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "単一形"
+when = { at = "07:00" }
+then = { action = "on", device = "hallway_light" }
+[[rules]]
+name = "配列形"
+when = { at = "22:00" }
+then = [
+  { action = "off", device = "hallway_light" },
+  { action = "off", device = "entry_motion" },
+]
+"#,
+        )
+        .unwrap();
+        assert_eq!(file.rules[0].then.actions().len(), 1);
+        assert_eq!(file.rules[1].then.actions().len(), 2);
+    }
+
+    #[test]
+    fn empty_then_array_is_config_parse_error_naming_the_rule() {
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "空のthen"
+when = { at = "07:00" }
+then = []
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("空のthen"),
+            "detail should name the rule: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn undefined_device_anywhere_in_then_array_fails_validation() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "2番目が未定義"
+when = { at = "07:00" }
+then = [
+  { action = "on", device = "hallway_light" },
+  { action = "on", device = "no_such_device" },
+]
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&config_with_devices()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NameNotFound);
+        assert!(
+            err.detail.contains("2番目が未定義") && err.detail.contains("no_such_device"),
+            "detail should name rule and device: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn then_round_trips_through_json_preserving_shape() {
+        // casad check は RuleFile をそのまま JSON 出力する。単一形はオブジェクト、
+        // 配列形は配列のまま出ること（既存出力の互換維持）。
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "単一形"
+when = { at = "07:00" }
+then = { action = "on", device = "hallway_light" }
+[[rules]]
+name = "配列形"
+when = { at = "22:00" }
+then = [{ action = "off", device = "hallway_light" }]
+"#,
+        )
+        .unwrap();
+        let json = serde_json::to_value(&file).unwrap();
+        assert!(json["rules"][0]["then"].is_object());
+        assert!(json["rules"][1]["then"].is_array());
     }
 }
