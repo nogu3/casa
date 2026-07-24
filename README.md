@@ -215,8 +215,9 @@ mat describe <node_id>
 mat color-temp --node <node_id> [--endpoint <ep>] --kelvin <k> | --mireds <m> [--transition <t>]
 ```
 
-A Matter device requires `node_id` in the config and optionally holds `endpoint`
-(for the on/off shortcut; the default is 1 on the mat side):
+A Matter device requires either `node_id` or `group` in the config and
+optionally holds `endpoint` (for the on/off shortcut; the default is 1 on the
+mat side):
 
 ```toml
 [devices.living_light]
