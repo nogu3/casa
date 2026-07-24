@@ -271,7 +271,10 @@ fn check_matter_device(config: &Config, rule_name: &str, device: &str) -> Result
         .device(device)
         .map_err(|e| CasaError::new(e.kind, format!("rule \"{rule_name}\": {}", e.detail)))?;
     match dev {
-        casa_core::config::Device::Matter { node_id, .. } => {
+        casa_core::config::Device::Matter {
+            node_id: Some(node_id),
+            ..
+        } => {
             if parse_node_id(node_id).is_none() {
                 return Err(CasaError::new(
                     ErrorKind::ConfigParse,
@@ -282,6 +285,12 @@ fn check_matter_device(config: &Config, rule_name: &str, device: &str) -> Result
             }
             Ok(())
         }
+        casa_core::config::Device::Matter { node_id: None, .. } => Err(CasaError::new(
+            ErrorKind::ConfigParse,
+            format!(
+                "rule \"{rule_name}\": device \"{device}\" is a matter group (groupcast) with no node_id; a matter event trigger requires a node_id device"
+            ),
+        )),
         other => Err(CasaError::new(
             ErrorKind::ProtocolUnsupported,
             format!(

@@ -22,11 +22,15 @@ const BIN: &str = "mat";
 
 pub struct MatterAdapter;
 
-/// デバイス定義から (node_id, on/off 用エンドポイント) を取り出す。dispatch は
-/// `adapter_for` が variant で行うので、他 variant が来ることはない。
+/// デバイス定義から (node_id, on/off 用エンドポイント) を取り出す。group 指定
+/// （node_id なし）の場合は interim で None（Task 2 で groupcast 対応）。
 fn address(device: &Device) -> Option<(&str, Option<u32>)> {
     match device {
-        Device::Matter { node_id, endpoint } => Some((node_id, *endpoint)),
+        Device::Matter {
+            node_id: Some(node_id),
+            endpoint,
+            ..
+        } => Some((node_id, *endpoint)),
         _ => None,
     }
 }
@@ -114,14 +118,16 @@ mod tests {
 
     fn device() -> Device {
         Device::Matter {
-            node_id: "1234".into(),
+            node_id: Some("1234".into()),
+            group: None,
             endpoint: None,
         }
     }
 
     fn device_on_endpoint(ep: u32) -> Device {
         Device::Matter {
-            node_id: "1234".into(),
+            node_id: Some("1234".into()),
+            group: None,
             endpoint: Some(ep),
         }
     }

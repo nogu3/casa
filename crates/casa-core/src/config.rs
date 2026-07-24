@@ -47,10 +47,14 @@ pub enum Device {
         device_id: String,
     },
     Matter {
-        node_id: String,
-        /// OnOff ショートカット（`casa on`/`off`）が使うエンドポイント。
-        /// 未指定なら `mat` 側の既定（1）に委ねる。`get`/`set` は
-        /// `endpoint/cluster/attribute` セレクタ側で endpoint を持つのでここは使わない。
+        /// unicast 宛先の node_id。`group` と排他（ロード時に検証）。
+        #[serde(default)]
+        node_id: Option<String>,
+        /// Matter wire group（groupcast）の宛先。mat の group alias / GroupId を
+        /// パススルーする（casa は解釈しない。alias→GroupId 解決は mat）。`node_id` と排他。
+        #[serde(default)]
+        group: Option<String>,
+        /// OnOff/invoke ショートカットが使うエンドポイント。未指定なら mat 既定(1)。
         #[serde(default)]
         endpoint: Option<u32>,
     },
@@ -173,6 +177,34 @@ pub fn parse(text: &str) -> Result<Config, CasaError> {
         }
     }
 
+    // Matter デバイスは node_id / group のちょうど一方が必須（排他）。
+    for (name, device) in &config.devices {
+        if let Device::Matter {
+            node_id, group, ..
+        } = device
+        {
+            match (node_id, group) {
+                (Some(_), None) | (None, Some(_)) => {}
+                (Some(_), Some(_)) => {
+                    return Err(CasaError::new(
+                        ErrorKind::ConfigParse,
+                        format!(
+                            "matter device \"{name}\" sets both node_id and group; exactly one is required"
+                        ),
+                    ));
+                }
+                (None, None) => {
+                    return Err(CasaError::new(
+                        ErrorKind::ConfigParse,
+                        format!(
+                            "matter device \"{name}\" requires exactly one of node_id or group"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
     Ok(config)
 }
 
@@ -243,19 +275,81 @@ endpoint = 2
 "#;
         let config = parse(text).unwrap();
         match config.device("living_light").unwrap() {
-            Device::Matter { node_id, endpoint } => {
-                assert_eq!(node_id, "1234");
+            Device::Matter {
+                node_id, endpoint, ..
+            } => {
+                assert_eq!(node_id.as_deref(), Some("1234"));
                 assert_eq!(*endpoint, None);
             }
             other => panic!("unexpected device: {other:?}"),
         }
         match config.device("strip_outlet2").unwrap() {
-            Device::Matter { node_id, endpoint } => {
-                assert_eq!(node_id, "5678");
+            Device::Matter {
+                node_id, endpoint, ..
+            } => {
+                assert_eq!(node_id.as_deref(), Some("5678"));
                 assert_eq!(*endpoint, Some(2));
             }
             other => panic!("unexpected device: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_matter_group_device() {
+        let text = r#"
+version = 1
+[devices.desk_room_lights]
+protocol = "matter"
+group = "desk_room_lights"
+"#;
+        let config = parse(text).unwrap();
+        match config.device("desk_room_lights").unwrap() {
+            Device::Matter {
+                node_id,
+                group,
+                endpoint,
+            } => {
+                assert_eq!(*node_id, None);
+                assert_eq!(group.as_deref(), Some("desk_room_lights"));
+                assert_eq!(*endpoint, None);
+            }
+            other => panic!("unexpected device: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matter_with_both_node_id_and_group_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.x]
+protocol = "matter"
+node_id = "17"
+group = "desk_room_lights"
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("both node_id and group"),
+            "detail: {}",
+            err.detail
+        );
+    }
+
+    #[test]
+    fn matter_with_neither_node_id_nor_group_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.x]
+protocol = "matter"
+endpoint = 1
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("exactly one of node_id or group"),
+            "detail: {}",
+            err.detail
+        );
     }
 
     #[test]

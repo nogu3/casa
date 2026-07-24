@@ -82,7 +82,8 @@ mod tests {
     #[test]
     fn matter_devices_dispatch_to_matter_adapter() {
         let device = Device::Matter {
-            node_id: "1234".into(),
+            node_id: Some("1234".into()),
+            group: None,
             endpoint: None,
         };
         let adapter = adapter_for(&device).unwrap();
