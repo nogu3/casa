@@ -385,7 +385,24 @@ then = { action = "off", device = "bedroom_light" }
 name = "desk light off when study becomes vacant"
 when = { device = "study_motion", attribute = "occupancy", equals = 0 }
 then = { action = "off", device = "desk_tape_light" }
+
+# Multiple actions: one trigger, several actions. Same-device actions run in
+# declaration order; different-device actions run in parallel.
+[[rules]]
+name = "desk lights on when study becomes occupied"
+when = { device = "study_motion", attribute = "occupancy", equals = 1 }
+then = [
+  { action = "on", device = "desk_tape_light" },
+  { action = "on", device = "desk_light" },
+  { action = "invoke", device = "desk_light", command = "color-temp", args = ["--kelvin", "2700"] },
+]
 ```
+
+`then` accepts either a single table or an array of them. With an array, each
+action is dispatched to its target device's worker: actions aimed at the same
+device run in declaration order, actions aimed at different devices run in
+parallel. A failing action does not stop the remaining ones. Use a group
+(`[groups.x] members = [...]`) instead when every target takes the same action.
 
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON

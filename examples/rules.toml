@@ -21,3 +21,13 @@ then = { action = "off", device = "bedroom_light" }
 name = "example matter event trigger"
 when = { device = "living_light", attribute = "onoff", equals = true }
 then = { action = "on", device = "bedroom_light" }
+
+# Multiple actions for one trigger. Same-device actions keep declaration order;
+# different-device actions run in parallel. `then = []` is a config error.
+[[rules]]
+name = "example multiple actions"
+when = { device = "living_light", attribute = "onoff", equals = true }
+then = [
+  { action = "on", device = "bedroom_light" },
+  { action = "invoke", device = "bedroom_light", command = "color-temp", args = ["--kelvin", "2700"] },
+]
