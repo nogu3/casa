@@ -235,6 +235,23 @@ The `<property>` of `get` / `set` is in `endpoint/cluster/attribute` form
 interpret this selector; it just splits it on `/` and passes it to mat, and
 validity is verified on the mat (chip-tool) side.
 
+A Matter device can specify `group` instead of `node_id` (unicast) to target a
+Matter wire group (groupcast / multicast). The value of `group` is a `mat`
+group alias or GroupId; casa does not interpret it and passes it straight
+through to `mat group ... --group <value>` (alias→GroupId resolution is mat's
+responsibility). Exactly one of `node_id` or `group` may be specified (both or
+neither is a config error, exit 10).
+
+Groupcast supports only `on` / `off` / `invoke`. Because groupcast is
+unacknowledged (no response comes back), `get` / `set` / `describe` are
+unsupported (exit 14).
+
+```toml
+[devices.desk_room_lights]
+protocol = "matter"
+group = "desk_room_lights"
+```
+
 The swb interface that casa calls (SwitchBot's cloud API has no single-property
 read/write; `device_id` is injected as the first positional argument right
 after the subcommand):
