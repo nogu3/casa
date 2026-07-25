@@ -15,7 +15,7 @@ use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
 use crate::dispatch::{distinct_devices, Dispatcher, Job};
-use crate::rules::{parse_node_id, Rule, RuleFile, Trigger};
+use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Trigger};
 use crate::{casa_runner, enl, mat};
 
 /// `casad run` の挙動。
@@ -36,11 +36,55 @@ pub fn parse_hm(s: &str) -> Result<NaiveTime, CasaError> {
     })
 }
 
-/// すべての時刻トリガが正しい HH:MM か検証する。`casad check` / `run` の両方が使う。
+/// ルールの有効時間帯を HH:MM 2 本として解析する。返り値は (from, to)。
+/// 区間は `from` を含み `to` を含まない。`from > to` は日跨ぎを表す。
+/// `from == to` は「空区間」とも「全日」とも読めるためエラーにする。
+pub fn parse_active_window(w: &ActiveWindow) -> Result<(NaiveTime, NaiveTime), CasaError> {
+    let from = parse_hm(&w.from)?;
+    let to = parse_hm(&w.to)?;
+    if from == to {
+        return Err(CasaError::new(
+            ErrorKind::ConfigParse,
+            format!(
+                "active window from and to are both \"{}\" (an empty window and an all-day window cannot be told apart)",
+                w.from
+            ),
+        ));
+    }
+    Ok((from, to))
+}
+
+/// ルールが now の時点で有効か。`active` 未指定なら常に有効。
+///
+/// 解析できない窓は「無効」に倒す。起動前に [`validate_schedule`] が弾く前提だが、
+/// 万一届いたら実機を動かさない側へ倒すのが安全側（不正な時刻の時刻トリガを
+/// [`due_time_rules`] が発火させないのと同じ方針）。
+///
+/// 発火判定（`due_time_rules` 等）への組み込みは別タスクの範囲。それまで
+/// 呼び出し元がないので dead_code を明示的に許容する。
+#[allow(dead_code)]
+fn rule_is_active(rule: &Rule, now: NaiveTime) -> bool {
+    let Some(w) = &rule.active else {
+        return true;
+    };
+    match parse_active_window(w) {
+        Ok((from, to)) if from < to => now >= from && now < to,
+        Ok((from, to)) => now >= from || now < to, // 日跨ぎ
+        Err(_) => false,
+    }
+}
+
+/// すべての時刻トリガと有効時間帯が正しい HH:MM か検証する。
+/// `casad check` / `run` の両方が使い、不正なルールで常駐が始まらないようにする。
 pub fn validate_schedule(file: &RuleFile) -> Result<(), CasaError> {
     for rule in &file.rules {
         if let Trigger::Time { at } = &rule.when {
             parse_hm(at).map_err(|e| {
+                CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
+            })?;
+        }
+        if let Some(w) = &rule.active {
+            parse_active_window(w).map_err(|e| {
                 CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
             })?;
         }
@@ -776,5 +820,69 @@ then = [
         );
         // 戻り値は成功したアクション数。
         assert_eq!(ok, 2);
+    }
+
+    fn rule_with_window(from: &str, to: &str) -> RuleFile {
+        rules(&format!(
+            r#"
+version = 1
+[[rules]]
+name = "窓つき"
+when = {{ at = "12:00" }}
+active = {{ from = "{from}", to = "{to}" }}
+then = {{ action = "on", device = "living_aircon" }}
+"#
+        ))
+    }
+
+    #[test]
+    fn active_window_includes_from_and_excludes_to() {
+        let file = rule_with_window("06:00", "21:00");
+        let r = &file.rules[0];
+        assert!(rule_is_active(r, at(6, 0)), "from 境界は含む");
+        assert!(rule_is_active(r, at(12, 34)));
+        assert!(rule_is_active(r, at(20, 59)));
+        assert!(!rule_is_active(r, at(21, 0)), "to 境界は含まない");
+        assert!(!rule_is_active(r, at(5, 59)));
+        assert!(!rule_is_active(r, at(23, 0)));
+    }
+
+    #[test]
+    fn active_window_wraps_over_midnight() {
+        let file = rule_with_window("21:00", "06:00");
+        let r = &file.rules[0];
+        assert!(rule_is_active(r, at(21, 0)));
+        assert!(rule_is_active(r, at(23, 59)));
+        assert!(rule_is_active(r, at(0, 0)));
+        assert!(rule_is_active(r, at(5, 59)));
+        assert!(!rule_is_active(r, at(6, 0)));
+        assert!(!rule_is_active(r, at(12, 0)));
+    }
+
+    #[test]
+    fn rule_without_active_window_is_always_active() {
+        let file = rules(SCHEDULE);
+        for r in &file.rules {
+            assert!(rule_is_active(r, at(0, 0)));
+            assert!(rule_is_active(r, at(13, 37)));
+            assert!(rule_is_active(r, at(23, 59)));
+        }
+    }
+
+    #[test]
+    fn validate_schedule_rejects_malformed_active_window() {
+        let file = rule_with_window("6am", "21:00");
+        let err = validate_schedule(&file).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("窓つき"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn validate_schedule_rejects_zero_width_active_window() {
+        // from == to は「空区間」とも「全日」とも読めるので弾く。
+        let file = rule_with_window("06:00", "06:00");
+        let err = validate_schedule(&file).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("窓つき"), "detail: {}", err.detail);
     }
 }
