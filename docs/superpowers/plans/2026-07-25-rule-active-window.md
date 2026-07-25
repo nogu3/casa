@@ -115,7 +115,7 @@ then = { action = "off", device = "living_aircon" }
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib rules::tests::parses_active_window`
+Run: `cargo test -p casad --bin casad rules::tests::parses_active_window`
 Expected: コンパイルエラー `no field 'active' on type '&Rule'`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -147,7 +147,7 @@ pub struct ActiveWindow {
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `cargo test -p casad --lib rules::`
+Run: `cargo test -p casad --bin casad rules::`
 Expected: 新規 4 件を含め全て PASS
 
 - [ ] **Step 5: clippy を通す**
@@ -251,7 +251,7 @@ then = {{ action = "on", device = "living_aircon" }}
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib engine::tests::active_window_includes_from_and_excludes_to`
+Run: `cargo test -p casad --bin casad engine::tests::active_window_includes_from_and_excludes_to`
 Expected: コンパイルエラー `cannot find function 'rule_is_active' in this scope`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -324,7 +324,7 @@ pub fn validate_schedule(file: &RuleFile) -> Result<(), CasaError> {
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `cargo test -p casad --lib engine::`
+Run: `cargo test -p casad --bin casad engine::`
 Expected: 新規 5 件を含め全て PASS
 
 - [ ] **Step 5: clippy を通す**
@@ -469,7 +469,7 @@ then = { action = "on", device = "desk_tape_light" }
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib engine::tests::due_time_rules_respects_active_window`
+Run: `cargo test -p casad --bin casad engine::tests::due_time_rules_respects_active_window`
 Expected: 引数の数が合わずコンパイルエラー（`due_event_rules` / `due_matter_event_rules` が 3 引数）。`due_time_rules_respects_active_window` 自体は「窓を見ていない」ため assert 失敗になる。
 
 - [ ] **Step 3: マッチ関数に窓を適用する**
@@ -605,7 +605,7 @@ pub fn now_or(override_now: Option<NaiveTime>) -> NaiveTime {
 
 - [ ] **Step 4: 単体テストが通ることを確認**
 
-Run: `cargo test -p casad --lib engine::`
+Run: `cargo test -p casad --bin casad engine::`
 Expected: 新規 4 件を含め全て PASS
 
 - [ ] **Step 5: `--now` の併用制約を緩める**
