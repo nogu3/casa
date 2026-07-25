@@ -31,3 +31,13 @@ then = [
   { action = "on", device = "bedroom_light" },
   { action = "invoke", device = "bedroom_light", command = "color-temp", args = ["--kelvin", "2700"] },
 ]
+
+# Active window: this rule is only in effect between 06:00 and 21:00. The start is
+# inclusive and the end is exclusive, so it is already inactive at 21:00 sharp.
+# `from` later than `to` wraps over midnight (e.g. from = "21:00", to = "06:00").
+# Omit `active` entirely and the rule is in effect at all times.
+[[rules]]
+name = "example rule limited to daytime"
+when = { device = "living_light", attribute = "onoff", equals = false }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "bedroom_light" }
