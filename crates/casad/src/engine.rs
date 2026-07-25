@@ -204,11 +204,13 @@ pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
     enl_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = enl::listen_once(enl_bin)?;
-    Ok(fire_due_events(file, config, &events, now, config_path))
+    // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
+    // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
+    Ok(fire_due_events(file, config, &events, now_or(now), config_path))
 }
 
 /// Matter イベントトリガのルールが、与えられた mat listen イベント 1 件に一致するか。
@@ -276,12 +278,14 @@ pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
     mat_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = mat::listen_once(mat_bin)?;
+    // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
+    // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
     Ok(fire_all(
-        due_matter_event_rules(file, config, &events, now),
+        due_matter_event_rules(file, config, &events, now_or(now)),
         config_path,
     ))
 }
@@ -1004,6 +1008,19 @@ then = { action = "on", device = "desk_tape_light" }
                 &file,
                 &cfg,
                 &[event("192.0.2.10", "013001", "80", "30")],
+                at(3, 0)
+            )
+            .len(),
+            1
+        );
+        // Matter イベントトリガも同様（3経路すべてを後方互換で覆う）。
+        let matter_file = rules(MATTER_RULE);
+        let matter_cfg = config_matter();
+        assert_eq!(
+            due_matter_event_rules(
+                &matter_file,
+                &matter_cfg,
+                &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
                 at(3, 0)
             )
             .len(),

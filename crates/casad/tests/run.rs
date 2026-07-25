@@ -109,12 +109,13 @@ then = { action = "off", device = "living_aircon" }
 }
 
 #[test]
-fn run_now_requires_once() {
+fn run_now_requires_a_oneshot_flag() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), DUMMY_CONFIG);
     let rules = write_rules(dir.path(), SCHEDULE);
 
-    // --now を --once 無しで使うと clap が引数エラー（exit 2）。
+    // --now は --once / --listen-once / --listen-once-mat のいずれか
+    // （clap ArgGroup "oneshot"）が無いと引数エラー（exit 2）。
     let out = run_casad(
         &[
             "run",

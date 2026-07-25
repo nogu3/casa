@@ -287,6 +287,7 @@ fn listen_once_mat_does_not_fire_outside_active_window() {
         &[
             ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
             ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("RUST_LOG", "debug"),
         ],
     );
 
@@ -295,6 +296,16 @@ fn listen_once_mat_does_not_fire_outside_active_window() {
         !String::from_utf8_lossy(&out.stdout).contains("casa called"),
         "stdout: {}",
         String::from_utf8_lossy(&out.stdout)
+    );
+    // 「窓外でルールがスキップされた」ことが debug ログで追える（切り分けコスト低減が目的）。
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("outside its active window"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("書斎 不在で消灯（昼だけ）"),
+        "stderr: {stderr}"
     );
 }
 

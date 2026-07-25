@@ -89,7 +89,7 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
                     &rule_file,
                     &config,
                     &enl_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single event drain complete");
@@ -101,7 +101,7 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
                     &rule_file,
                     &config,
                     &mat_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single matter event drain complete");
