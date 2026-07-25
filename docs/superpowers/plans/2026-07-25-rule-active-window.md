@@ -531,11 +531,13 @@ pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
     enl_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = enl::listen_once(enl_bin)?;
-    Ok(fire_due_events(file, config, &events, now, config_path))
+    // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
+    // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
+    Ok(fire_due_events(file, config, &events, now_or(now), config_path))
 }
 ```
 
@@ -560,12 +562,13 @@ pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
     mat_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = mat::listen_once(mat_bin)?;
+    // 同上。listen が返った後の時刻で窓を判定する（--now があればそれを優先）。
     Ok(fire_all(
-        due_matter_event_rules(file, config, &events, now),
+        due_matter_event_rules(file, config, &events, now_or(now)),
         config_path,
     ))
 }
@@ -654,7 +657,7 @@ Expected: 新規 4 件を含め全て PASS
                     &rule_file,
                     &config,
                     &enl_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single event drain complete");
@@ -666,7 +669,7 @@ Expected: 新規 4 件を含め全て PASS
                     &rule_file,
                     &config,
                     &mat_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single matter event drain complete");
