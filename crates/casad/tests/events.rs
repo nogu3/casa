@@ -225,3 +225,97 @@ fn listen_once_mat_does_not_fire_on_value_mismatch() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+const WINDOWED_MATTER_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "書斎 不在で消灯（昼だけ）"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+active = { from = "06:00", to = "21:00" }
+then = { action = "off", device = "desk_tape_light" }
+"#;
+
+#[test]
+fn listen_once_mat_fires_inside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_MATTER_RULES);
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--now",
+            "12:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("off desk_tape_light"), "stdout: {stdout}");
+}
+
+#[test]
+fn listen_once_mat_does_not_fire_outside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_MATTER_RULES);
+
+    // 22:00 は 06:00-21:00 の窓の外。イベントが一致しても発火しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--now",
+            "22:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("casa called"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn now_without_a_oneshot_flag_is_a_cli_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_MATTER_RULES);
+
+    // --now は 1 回だけ評価する経路専用。常駐起動に付けても黙って無視しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--now",
+            "12:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_eq!(out.status.code(), Some(2));
+}

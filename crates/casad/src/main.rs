@@ -79,12 +79,17 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             let enl_bin = casa_core::runner::resolve_bin("enl", &config);
             let mat_bin = casa_core::runner::resolve_bin("mat", &config);
 
+            // --now は 1 回だけ評価する 3 経路で共通に効く。時刻トリガの評価と
+            // ルールの有効時間帯（active）判定の両方に使う。
+            let now = now.map(|s| engine::parse_hm(&s)).transpose()?;
+
             if listen_once {
                 // イベント側のデバッグ経路: enl listen を 1 回回して評価し終了する。
                 let fired = engine::drain_events_once(
                     &rule_file,
                     &config,
                     &enl_bin,
+                    engine::now_or(now),
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single event drain complete");
@@ -96,13 +101,13 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
                     &rule_file,
                     &config,
                     &mat_bin,
+                    engine::now_or(now),
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single matter event drain complete");
                 return Ok(0);
             }
 
-            let now = now.map(|s| engine::parse_hm(&s)).transpose()?;
             engine::run(
                 &rule_file,
                 &config,

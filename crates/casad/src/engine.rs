@@ -59,10 +59,6 @@ pub fn parse_active_window(w: &ActiveWindow) -> Result<(NaiveTime, NaiveTime), C
 /// 解析できない窓は「無効」に倒す。起動前に [`validate_schedule`] が弾く前提だが、
 /// 万一届いたら実機を動かさない側へ倒すのが安全側（不正な時刻の時刻トリガを
 /// [`due_time_rules`] が発火させないのと同じ方針）。
-///
-/// 発火判定（`due_time_rules` 等）への組み込みは別タスクの範囲。それまで
-/// 呼び出し元がないので dead_code を明示的に許容する。
-#[allow(dead_code)]
 fn rule_is_active(rule: &Rule, now: NaiveTime) -> bool {
     let Some(w) = &rule.active else {
         return true;
@@ -72,6 +68,17 @@ fn rule_is_active(rule: &Rule, now: NaiveTime) -> bool {
         Ok((from, to)) => now >= from || now < to, // 日跨ぎ
         Err(_) => false,
     }
+}
+
+/// 窓外で落としたルールを debug ログに残す。「センサーは反応しているのにルールが
+/// 動かない」の切り分けコストを下げるため。**トリガに一致した後にだけ**呼ぶこと
+/// （毎イベントで全ルール分のログを出さない）。
+fn active_or_log(rule: &Rule, now: NaiveTime) -> bool {
+    if rule_is_active(rule, now) {
+        return true;
+    }
+    tracing::debug!(rule = %rule.name, %now, "rule skipped: outside its active window");
+    false
 }
 
 /// すべての時刻トリガと有効時間帯が正しい HH:MM か検証する。
@@ -105,6 +112,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
             Trigger::Event { .. } => false,
             Trigger::MatterEvent { .. } => false,
         })
+        .filter(|r| active_or_log(r, now))
         .collect()
 }
 
@@ -168,11 +176,13 @@ fn due_event_rules<'a>(
     file: &'a RuleFile,
     config: &Config,
     events: &[enl::Event],
+    now: NaiveTime,
 ) -> Vec<&'a Rule> {
     file.rules
         .iter()
         .filter(|r| matches!(r.when, Trigger::Event { .. }))
         .filter(|r| events.iter().any(|e| event_matches(r, config, e)))
+        .filter(|r| active_or_log(r, now))
         .collect()
 }
 
@@ -182,9 +192,10 @@ pub fn fire_due_events(
     file: &RuleFile,
     config: &Config,
     events: &[enl::Event],
+    now: NaiveTime,
     config_path: Option<&Path>,
 ) -> usize {
-    fire_all(due_event_rules(file, config, events), config_path)
+    fire_all(due_event_rules(file, config, events, now), config_path)
 }
 
 /// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。成功した
@@ -193,10 +204,11 @@ pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
     enl_bin: &str,
+    now: NaiveTime,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = enl::listen_once(enl_bin)?;
-    Ok(fire_due_events(file, config, &events, config_path))
+    Ok(fire_due_events(file, config, &events, now, config_path))
 }
 
 /// Matter イベントトリガのルールが、与えられた mat listen イベント 1 件に一致するか。
@@ -248,11 +260,13 @@ fn due_matter_event_rules<'a>(
     file: &'a RuleFile,
     config: &Config,
     events: &[mat::Event],
+    now: NaiveTime,
 ) -> Vec<&'a Rule> {
     file.rules
         .iter()
         .filter(|r| matches!(r.when, Trigger::MatterEvent { .. }))
         .filter(|r| events.iter().any(|e| matter_event_matches(r, config, e)))
+        .filter(|r| active_or_log(r, now))
         .collect()
 }
 
@@ -262,11 +276,12 @@ pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
     mat_bin: &str,
+    now: NaiveTime,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = mat::listen_once(mat_bin)?;
     Ok(fire_all(
-        due_matter_event_rules(file, config, &events),
+        due_matter_event_rules(file, config, &events, now),
         config_path,
     ))
 }
@@ -327,6 +342,11 @@ fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
     fire_jobs(jobs(&rules), |job| run_one(job, config_path))
 }
 
+/// `--now` の上書きを解決する。None なら実時計（ローカルタイム）。
+pub fn now_or(override_now: Option<NaiveTime>) -> NaiveTime {
+    override_now.unwrap_or_else(|| Local::now().time())
+}
+
 /// ルールエンジンを走らせる。`--once` は時刻 1 tick で終了、常駐は時刻スケジューラ
 /// （毎分 tick）と イベントリスナ（enl listen / mat listen ループ）を並行に回す。
 pub fn run(
@@ -338,7 +358,7 @@ pub fn run(
     opts: RunOpts,
 ) -> Result<i32, CasaError> {
     if opts.once {
-        let now = opts.now.unwrap_or_else(|| Local::now().time());
+        let now = now_or(opts.now);
         let fired = tick(file, now, config_path);
         tracing::info!(fired, ?now, "single tick complete");
         return Ok(0);
@@ -397,7 +417,9 @@ fn event_loop<'env>(
     loop {
         match enl::listen_once(enl_bin) {
             Ok(events) => {
-                let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events));
+                // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
+                let now = Local::now().time();
+                let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events, now));
                 if queued > 0 {
                     tracing::debug!(queued, "event rule actions queued");
                 }
@@ -421,7 +443,10 @@ fn matter_event_loop<'env>(
     loop {
         match mat::listen_once(mat_bin) {
             Ok(events) => {
-                let queued = dispatcher.dispatch_all(due_matter_event_rules(file, config, &events));
+                // 同上。listen が返った時刻で窓を判定する。
+                let now = Local::now().time();
+                let queued =
+                    dispatcher.dispatch_all(due_matter_event_rules(file, config, &events, now));
                 if queued > 0 {
                     tracing::debug!(queued, "matter event rule actions queued");
                 }
@@ -769,7 +794,7 @@ then = { action = "off", device = "desk_tape_light" }
 "#,
         );
         let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
-        let due = due_matter_event_rules(&file, &cfg, &[ev]);
+        let due = due_matter_event_rules(&file, &cfg, &[ev], at(12, 0));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].name, "人感OFFで消灯");
     }
@@ -884,5 +909,105 @@ then = {{ action = "on", device = "living_aircon" }}
         let err = validate_schedule(&file).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
         assert!(err.detail.contains("窓つき"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn due_time_rules_respects_active_window() {
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "窓外の時刻トリガ"
+when = { at = "22:00" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "off", device = "living_aircon" }
+[[rules]]
+name = "窓内の時刻トリガ"
+when = { at = "12:00" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+        );
+        // 22:00 は窓外なので、時刻が一致しても発火対象にならない。
+        assert!(due_time_rules(&file, at(22, 0)).is_empty());
+        let due = due_time_rules(&file, at(12, 0));
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].name, "窓内の時刻トリガ");
+    }
+
+    #[test]
+    fn due_event_rules_respects_active_window() {
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "昼だけ電源ONで点灯"
+when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "living_aircon" }
+"#,
+        );
+        let cfg = config_living();
+        let inside = due_event_rules(
+            &file,
+            &cfg,
+            &[event("192.0.2.10", "013001", "80", "30")],
+            at(12, 0),
+        );
+        assert_eq!(inside.len(), 1);
+        let outside = due_event_rules(
+            &file,
+            &cfg,
+            &[event("192.0.2.10", "013001", "80", "30")],
+            at(3, 0),
+        );
+        assert!(outside.is_empty());
+    }
+
+    #[test]
+    fn due_matter_event_rules_respects_active_window() {
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "書斎 不在で扇風機ON"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        );
+        let cfg = config_matter();
+        let inside = due_matter_event_rules(
+            &file,
+            &cfg,
+            &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
+            at(12, 0),
+        );
+        assert_eq!(inside.len(), 1);
+        let outside = due_matter_event_rules(
+            &file,
+            &cfg,
+            &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
+            at(21, 30),
+        );
+        assert!(outside.is_empty());
+    }
+
+    #[test]
+    fn windowless_rules_still_fire_at_any_time() {
+        // 後方互換: active を持たないルールは従来どおりどの時刻でも発火する。
+        let file = rules(SCHEDULE);
+        assert_eq!(due_time_rules(&file, at(22, 0)).len(), 1);
+        let cfg = config_living();
+        assert_eq!(
+            due_event_rules(
+                &file,
+                &cfg,
+                &[event("192.0.2.10", "013001", "80", "30")],
+                at(3, 0)
+            )
+            .len(),
+            1
+        );
     }
 }
