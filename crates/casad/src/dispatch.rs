@@ -114,6 +114,7 @@ mod tests {
             when: Trigger::Time {
                 at: "00:00".to_string(),
             },
+            active: None,
             then: Thens::One(Then::On {
                 device: device.to_string(),
             }),
@@ -127,6 +128,7 @@ mod tests {
             when: Trigger::Time {
                 at: "00:00".to_string(),
             },
+            active: None,
             then: Thens::Many(
                 devices
                     .iter()
@@ -210,6 +212,7 @@ then = { action = "off", device = "desk_light" }
             when: Trigger::Time {
                 at: "00:00".to_string(),
             },
+            active: None,
             then: Thens::Many(vec![
                 Then::On {
                     device: "dev_a".to_string(),
