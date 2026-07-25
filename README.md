@@ -414,6 +414,13 @@ then = [
   { action = "on", device = "desk_light" },
   { action = "invoke", device = "desk_light", command = "color-temp", args = ["--kelvin", "2700"] },
 ]
+
+# Active window: this rule only fires between 06:00 and 21:00.
+[[rules]]
+name = "circulate air in the study while nobody is there"
+when   = { device = "study_motion", attribute = "occupancy", equals = 0 }
+active = { from = "06:00", to = "21:00" }
+then   = { action = "on", device = "study_fan" }
 ```
 
 `then` accepts either a single table or an array of them. With an array, each
@@ -423,6 +430,17 @@ parallel. A failing action does not stop the remaining ones. Use a group
 (`[groups.x] members = [...]`) instead when every target takes the same action.
 `then = []` (an empty array) is a config error. Ordering is guaranteed within
 a single device's queue; actions from concurrently firing rules may interleave.
+
+`active = { from = "HH:MM", to = "HH:MM" }` limits a rule to a time window. The
+window is half-open: `from` is included and `to` is excluded, so a rule with
+`to = "21:00"` is already inactive at 21:00 sharp. A `from` later than `to`
+wraps over midnight (`{ from = "21:00", to = "06:00" }` covers 21:00–23:59 and
+00:00–05:59). `from` equal to `to` is a config error, because an empty window
+and an all-day window cannot be told apart. Omit `active` and the rule is in
+effect at all times. The window applies to every trigger kind — time, ECHONET
+event, and Matter event — and is evaluated against local time when the trigger
+matches. A rule dropped because it is outside its window is logged at debug
+level.
 
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON
@@ -439,6 +457,10 @@ casad run rules.toml --listen-once
 
 # Debug: run mat listen exactly once to evaluate Matter event triggers
 casad run rules.toml --listen-once-mat
+
+# Debug: evaluate as if it were 22:00 (works with --once / --listen-once / --listen-once-mat).
+# Drives both time-trigger evaluation and the `active` window check.
+casad run rules.toml --listen-once-mat --now 22:00
 ```
 
 Event triggers are realized by running the child CLI's `listen` in a loop:
