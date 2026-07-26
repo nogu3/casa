@@ -22,7 +22,10 @@ use crate::{casa_runner, enl, mat};
 pub struct RunOpts {
     /// true なら 1 回だけ評価して終了する。false なら常駐して毎分 tick する。
     pub once: bool,
-    /// 現在時刻の上書き（`--once` 併用のデバッグ用）。None なら実時計。
+    /// 現在時刻の上書き（デバッグ用）。None なら実時計。
+    /// `--now` は `--once`/`--listen-once`/`--listen-once-mat` の 3 経路で使えるが、
+    /// `RunOpts`（延いてはこのフィールド）が実際に読まれるのは `--once` 経路のみ
+    /// （他の 2 経路は `main.rs` が `now` をそのまま `drain_*_once` に渡す）。
     pub now: Option<NaiveTime>,
 }
 
@@ -39,7 +42,7 @@ pub fn parse_hm(s: &str) -> Result<NaiveTime, CasaError> {
 /// ルールの有効時間帯を HH:MM 2 本として解析する。返り値は (from, to)。
 /// 区間は `from` を含み `to` を含まない。`from > to` は日跨ぎを表す。
 /// `from == to` は「空区間」とも「全日」とも読めるためエラーにする。
-pub fn parse_active_window(w: &ActiveWindow) -> Result<(NaiveTime, NaiveTime), CasaError> {
+fn parse_active_window(w: &ActiveWindow) -> Result<(NaiveTime, NaiveTime), CasaError> {
     let from = parse_hm(&w.from)?;
     let to = parse_hm(&w.to)?;
     if from == to {
@@ -54,6 +57,19 @@ pub fn parse_active_window(w: &ActiveWindow) -> Result<(NaiveTime, NaiveTime), C
     Ok((from, to))
 }
 
+/// `now` が半開区間 `[from, to)` に入っているか。`from` を含み `to` を含まない。
+/// `from > to` は日跨ぎとして扱う（`from == to` は呼び出し側で事前に弾く前提）。
+///
+/// [`rule_is_active`] と [`validate_schedule`] の両方がこれを使うことで、
+/// 「窓に入っているか」の判定が 2 箇所で書かれてズレることを防ぐ。
+fn time_in_window(now: NaiveTime, from: NaiveTime, to: NaiveTime) -> bool {
+    if from < to {
+        now >= from && now < to
+    } else {
+        now >= from || now < to // 日跨ぎ
+    }
+}
+
 /// ルールが now の時点で有効か。`active` 未指定なら常に有効。
 ///
 /// 解析できない窓は「無効」に倒す。起動前に [`validate_schedule`] が弾く前提だが、
@@ -64,8 +80,7 @@ fn rule_is_active(rule: &Rule, now: NaiveTime) -> bool {
         return true;
     };
     match parse_active_window(w) {
-        Ok((from, to)) if from < to => now >= from && now < to,
-        Ok((from, to)) => now >= from || now < to, // 日跨ぎ
+        Ok((from, to)) => time_in_window(now, from, to),
         Err(_) => false,
     }
 }
@@ -82,18 +97,39 @@ fn active_or_log(rule: &Rule, now: NaiveTime) -> bool {
 }
 
 /// すべての時刻トリガと有効時間帯が正しい HH:MM か検証する。
+/// さらに、両方を持つルールについては `at` がその `active` 窓の中にあるかも検証する
+/// （窓の外にある `at` は静的に「絶対発火しない」と分かるルールなので設定エラーにする）。
 /// `casad check` / `run` の両方が使い、不正なルールで常駐が始まらないようにする。
 pub fn validate_schedule(file: &RuleFile) -> Result<(), CasaError> {
     for rule in &file.rules {
-        if let Trigger::Time { at } = &rule.when {
-            parse_hm(at).map_err(|e| {
-                CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
-            })?;
-        }
-        if let Some(w) = &rule.active {
-            parse_active_window(w).map_err(|e| {
-                CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
-            })?;
+        let at_time = match &rule.when {
+            Trigger::Time { at } => Some((
+                at,
+                parse_hm(at).map_err(|e| {
+                    CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
+                })?,
+            )),
+            _ => None,
+        };
+        let window = match &rule.active {
+            Some(w) => Some((
+                w,
+                parse_active_window(w).map_err(|e| {
+                    CasaError::new(e.kind, format!("rule \"{}\": {}", rule.name, e.detail))
+                })?,
+            )),
+            None => None,
+        };
+        if let (Some((at_str, at)), Some((w, (from, to)))) = (at_time, window) {
+            if !time_in_window(at, from, to) {
+                return Err(CasaError::new(
+                    ErrorKind::ConfigParse,
+                    format!(
+                        "rule \"{}\": trigger time \"{}\" falls outside its own active window [\"{}\", \"{}\"), so this rule can never fire",
+                        rule.name, at_str, w.from, w.to
+                    ),
+                ));
+            }
         }
     }
     Ok(())
@@ -347,7 +383,7 @@ fn fire_all(rules: Vec<&Rule>, config_path: Option<&Path>) -> usize {
 }
 
 /// `--now` の上書きを解決する。None なら実時計（ローカルタイム）。
-pub fn now_or(override_now: Option<NaiveTime>) -> NaiveTime {
+fn now_or(override_now: Option<NaiveTime>) -> NaiveTime {
     override_now.unwrap_or_else(|| Local::now().time())
 }
 
@@ -913,6 +949,67 @@ then = {{ action = "on", device = "living_aircon" }}
         let err = validate_schedule(&file).unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
         assert!(err.detail.contains("窓つき"), "detail: {}", err.detail);
+    }
+
+    fn rule_with_at_and_window(at: &str, from: &str, to: &str) -> RuleFile {
+        rules(&format!(
+            r#"
+version = 1
+[[rules]]
+name = "窓外トリガ"
+when = {{ at = "{at}" }}
+active = {{ from = "{from}", to = "{to}" }}
+then = {{ action = "off", device = "living_aircon" }}
+"#
+        ))
+    }
+
+    #[test]
+    fn validate_schedule_rejects_at_equal_to_window_to() {
+        // to は排他境界。at == to は「窓の外」＝この時刻トリガは絶対に発火しない。
+        let file = rule_with_at_and_window("21:00", "06:00", "21:00");
+        let err = validate_schedule(&file).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("窓外トリガ"), "detail: {}", err.detail);
+        assert!(err.detail.contains("21:00"), "detail: {}", err.detail);
+        assert!(err.detail.contains("06:00"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn validate_schedule_accepts_at_equal_to_window_from() {
+        // from は包含境界。at == from は窓の中なので有効。
+        let file = rule_with_at_and_window("06:00", "06:00", "21:00");
+        assert!(validate_schedule(&file).is_ok());
+    }
+
+    #[test]
+    fn validate_schedule_accepts_at_inside_wrapping_window() {
+        assert!(validate_schedule(&rule_with_at_and_window("23:00", "21:00", "06:00")).is_ok());
+        assert!(validate_schedule(&rule_with_at_and_window("03:00", "21:00", "06:00")).is_ok());
+    }
+
+    #[test]
+    fn validate_schedule_rejects_at_outside_wrapping_window() {
+        let file = rule_with_at_and_window("12:00", "21:00", "06:00");
+        let err = validate_schedule(&file).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("窓外トリガ"), "detail: {}", err.detail);
+    }
+
+    #[test]
+    fn validate_schedule_allows_event_trigger_with_active_window() {
+        // イベントトリガは at を持たないので、この静的な at-vs-window チェックの対象外。
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "窓つきイベント"
+when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "living_aircon" }
+"#,
+        );
+        assert!(validate_schedule(&file).is_ok());
     }
 
     #[test]
