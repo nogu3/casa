@@ -442,6 +442,12 @@ event, and Matter event — and is evaluated against local time when the trigger
 matches. A rule dropped because it is outside its window is logged at debug
 level.
 
+A time trigger whose `at` falls outside its own `active` window is a config
+error too: since `to` is exclusive, `when = { at = "21:00" }` combined with
+`active = { from = "06:00", to = "21:00" }` could never fire, so `casad check`
+and `casad run` reject it up front instead of loading a rule that silently does
+nothing.
+
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON
 casad check rules.toml
