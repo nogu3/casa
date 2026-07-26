@@ -246,7 +246,13 @@ pub fn drain_events_once(
     let events = enl::listen_once(enl_bin)?;
     // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
     // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
-    Ok(fire_due_events(file, config, &events, now_or(now), config_path))
+    Ok(fire_due_events(
+        file,
+        config,
+        &events,
+        now_or(now),
+        config_path,
+    ))
 }
 
 /// Matter イベントトリガのルールが、与えられた mat listen イベント 1 件に一致するか。
