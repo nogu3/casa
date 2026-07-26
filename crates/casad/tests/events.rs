@@ -115,6 +115,79 @@ fn listen_once_does_not_fire_on_value_mismatch() {
     );
 }
 
+const WINDOWED_EVENT_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "エアコン電源ONで点灯（昼だけ）"
+when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "living_aircon" }
+"#;
+
+#[test]
+fn listen_once_fires_inside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_EVENT_RULES);
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once",
+            "--now",
+            "12:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_ENL_BIN", &fixture("enl_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // 12:00 は 06:00-21:00 の窓の中。通知が一致し casa に `on living_aircon` が渡る。
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("on living_aircon"), "stdout: {stdout}");
+}
+
+#[test]
+fn listen_once_does_not_fire_outside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_EVENT_RULES);
+
+    // 22:00 は 06:00-21:00 の窓の外。通知が一致しても発火しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once",
+            "--now",
+            "22:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_ENL_BIN", &fixture("enl_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("casa called"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 const MATTER_CONFIG: &str = r#"
 version = 1
 
@@ -223,5 +296,88 @@ fn listen_once_mat_does_not_fire_on_value_mismatch() {
         !String::from_utf8_lossy(&out.stdout).contains("casa called"),
         "stdout: {}",
         String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+const WINDOWED_MATTER_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "書斎 不在で消灯（昼だけ）"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+active = { from = "06:00", to = "21:00" }
+then = { action = "off", device = "desk_tape_light" }
+"#;
+
+#[test]
+fn listen_once_mat_fires_inside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_MATTER_RULES);
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--now",
+            "12:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("off desk_tape_light"), "stdout: {stdout}");
+}
+
+#[test]
+fn listen_once_mat_does_not_fire_outside_active_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules = write_rules(dir.path(), WINDOWED_MATTER_RULES);
+
+    // 22:00 は 06:00-21:00 の窓の外。イベントが一致しても発火しない。
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--now",
+            "22:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("RUST_LOG", "debug"),
+        ],
+    );
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("casa called"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    // 「窓外でルールがスキップされた」ことが debug ログで追える（切り分けコスト低減が目的）。
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("outside its active window"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("書斎 不在で消灯（昼だけ）"),
+        "stderr: {stderr}"
     );
 }

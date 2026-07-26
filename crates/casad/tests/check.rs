@@ -127,3 +127,106 @@ fn check_example_rules_validate_against_example_config() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn check_reports_active_window_and_omits_it_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(
+        dir.path(),
+        r#"
+version = 1
+[[rules]]
+name = "常時"
+when = { at = "22:00" }
+then = { action = "off", device = "living_aircon" }
+[[rules]]
+name = "昼だけ"
+when = { device = "living_aircon", epc = "0x80", equals = "0x30" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "living_aircon" }
+"#,
+    );
+
+    let out = run_casad(
+        &[
+            "check",
+            rules.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    // active を持たないルールの JSON は従来どおり（後方互換）。
+    assert!(v["rules"][0].get("active").is_none());
+    assert_eq!(v["rules"][1]["active"]["from"], "06:00");
+    assert_eq!(v["rules"][1]["active"]["to"], "21:00");
+}
+
+#[test]
+fn check_zero_width_active_window_exits_10() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(
+        dir.path(),
+        r#"
+version = 1
+[[rules]]
+name = "幅ゼロの窓"
+when = { at = "22:00" }
+active = { from = "06:00", to = "06:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+    );
+
+    let out = run_casad(
+        &[
+            "check",
+            rules.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_eq!(out.status.code(), Some(10));
+    assert_eq!(stderr_error_json(&out)["error"]["kind"], "config_parse");
+}
+
+#[test]
+fn check_malformed_active_window_exits_10() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(
+        dir.path(),
+        r#"
+version = 1
+[[rules]]
+name = "壊れた窓"
+when = { at = "22:00" }
+active = { from = "6am", to = "21:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+    );
+
+    let out = run_casad(
+        &[
+            "check",
+            rules.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+
+    assert_eq!(out.status.code(), Some(10));
+    assert_eq!(stderr_error_json(&out)["error"]["kind"], "config_parse");
+}

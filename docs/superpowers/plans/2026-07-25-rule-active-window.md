@@ -115,7 +115,7 @@ then = { action = "off", device = "living_aircon" }
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib rules::tests::parses_active_window`
+Run: `cargo test -p casad --bin casad rules::tests::parses_active_window`
 Expected: コンパイルエラー `no field 'active' on type '&Rule'`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -147,7 +147,7 @@ pub struct ActiveWindow {
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `cargo test -p casad --lib rules::`
+Run: `cargo test -p casad --bin casad rules::`
 Expected: 新規 4 件を含め全て PASS
 
 - [ ] **Step 5: clippy を通す**
@@ -251,7 +251,7 @@ then = {{ action = "on", device = "living_aircon" }}
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib engine::tests::active_window_includes_from_and_excludes_to`
+Run: `cargo test -p casad --bin casad engine::tests::active_window_includes_from_and_excludes_to`
 Expected: コンパイルエラー `cannot find function 'rule_is_active' in this scope`
 
 - [ ] **Step 3: 最小の実装を書く**
@@ -324,7 +324,7 @@ pub fn validate_schedule(file: &RuleFile) -> Result<(), CasaError> {
 
 - [ ] **Step 4: テストが通ることを確認**
 
-Run: `cargo test -p casad --lib engine::`
+Run: `cargo test -p casad --bin casad engine::`
 Expected: 新規 5 件を含め全て PASS
 
 - [ ] **Step 5: clippy を通す**
@@ -469,7 +469,7 @@ then = { action = "on", device = "desk_tape_light" }
 
 - [ ] **Step 2: テストが失敗することを確認**
 
-Run: `cargo test -p casad --lib engine::tests::due_time_rules_respects_active_window`
+Run: `cargo test -p casad --bin casad engine::tests::due_time_rules_respects_active_window`
 Expected: 引数の数が合わずコンパイルエラー（`due_event_rules` / `due_matter_event_rules` が 3 引数）。`due_time_rules_respects_active_window` 自体は「窓を見ていない」ため assert 失敗になる。
 
 - [ ] **Step 3: マッチ関数に窓を適用する**
@@ -531,11 +531,13 @@ pub fn drain_events_once(
     file: &RuleFile,
     config: &Config,
     enl_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = enl::listen_once(enl_bin)?;
-    Ok(fire_due_events(file, config, &events, now, config_path))
+    // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
+    // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
+    Ok(fire_due_events(file, config, &events, now_or(now), config_path))
 }
 ```
 
@@ -560,12 +562,13 @@ pub fn drain_matter_events_once(
     file: &RuleFile,
     config: &Config,
     mat_bin: &str,
-    now: NaiveTime,
+    now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
     let events = mat::listen_once(mat_bin)?;
+    // 同上。listen が返った後の時刻で窓を判定する（--now があればそれを優先）。
     Ok(fire_all(
-        due_matter_event_rules(file, config, &events, now),
+        due_matter_event_rules(file, config, &events, now_or(now)),
         config_path,
     ))
 }
@@ -605,7 +608,7 @@ pub fn now_or(override_now: Option<NaiveTime>) -> NaiveTime {
 
 - [ ] **Step 4: 単体テストが通ることを確認**
 
-Run: `cargo test -p casad --lib engine::`
+Run: `cargo test -p casad --bin casad engine::`
 Expected: 新規 4 件を含め全て PASS
 
 - [ ] **Step 5: `--now` の併用制約を緩める**
@@ -654,7 +657,7 @@ Expected: 新規 4 件を含め全て PASS
                     &rule_file,
                     &config,
                     &enl_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single event drain complete");
@@ -666,7 +669,7 @@ Expected: 新規 4 件を含め全て PASS
                     &rule_file,
                     &config,
                     &mat_bin,
-                    engine::now_or(now),
+                    now,
                     cli.config.as_deref(),
                 )?;
                 tracing::info!(fired, "single matter event drain complete");
@@ -1095,23 +1098,35 @@ scp target/aarch64-unknown-linux-musl/release/casad jarvis:~/.local/bin/casad.ne
 ```
 Expected: 転送完了（exit 0）
 
-- [ ] **Step 3: アトミックに差し替えて再起動**
+- [ ] **Step 3: アトミックに差し替える（まだ restart しない）**
 
 対象ホスト `jarvis` / バイナリ `~/.local/bin/casad` / unit `casad`（user）を復唱してから実行する。
 
 ```bash
-ssh jarvis 'install -m755 ~/.local/bin/casad.new ~/.local/bin/casad && rm -f ~/.local/bin/casad.new && systemctl --user restart casad && systemctl --user status casad --no-pager --lines=0'
+ssh jarvis 'install -m755 ~/.local/bin/casad.new ~/.local/bin/casad && rm -f ~/.local/bin/casad.new && ~/.local/bin/casad --version'
+```
+Expected: `casad 1.4.0`（差し替えただけなので、稼働中の casad はまだ旧バイナリのまま）
+
+- [ ] **Step 4: restart する前に、新バイナリで本番ルールを検証する**
+
+新設した「時刻トリガの `at` が自分の `active` 窓の外」検証は、1 件でも該当すると
+`validate_schedule` がそこで返り、**`casad run` が起動時に exit 10 で落ちてルールが全部止まる**。
+restart してから気づくと照明もファンも自動化が死ぬので、restart の前に必ず通す。
+
+```bash
+ssh jarvis '~/.local/bin/casad check ~/.config/casa/rules.toml --config ~/.config/casa/devices.toml'; echo "exit=$?"
+```
+Expected: `exit=0` と `"ok":true`。exit 10 が出たらエラーが名指ししたルールを直してから進む
+（この時点ではまだ旧 casad が動き続けているので、実害なく引き返せる）
+
+- [ ] **Step 5: サービスを再起動する**
+
+```bash
+ssh jarvis 'systemctl --user restart casad && systemctl --user status casad --no-pager --lines=0'
 ```
 Expected: `Active: active (running)`
 
-- [ ] **Step 4: 実機のバージョンを確認**
-
-```bash
-ssh jarvis '~/.local/bin/casad --version'
-```
-Expected: `casad 1.4.0`
-
-- [ ] **Step 5: jarvis-iac に扇風機デバイスを追加**
+- [ ] **Step 6: jarvis-iac に扇風機デバイスを追加**
 
 `~/ghq/github.com/nogu3/jarvis-iac/roles/casa/files/devices.toml` の末尾（`[devices.plant_light]` の後ろ）に追記する:
 
@@ -1123,7 +1138,7 @@ protocol = "switchbot"
 device_id = "01-202607251040-40751692"
 ```
 
-- [ ] **Step 6: jarvis-iac にルールを追加**
+- [ ] **Step 7: jarvis-iac にルールを追加**
 
 `~/ghq/github.com/nogu3/jarvis-iac/roles/casa/files/rules.toml` の末尾に追記する。
 既存の「書斎 人感OFFで消灯 / 人感ONで点灯」は**変更しない**（照明は夜間も人感で動かす）。
@@ -1151,7 +1166,7 @@ when = { at = "21:00" }
 then = { action = "off", device = "study_fan" }
 ```
 
-- [ ] **Step 7: Ansible の差分を確認**
+- [ ] **Step 8: Ansible の差分を確認**
 
 ```bash
 cd ~/ghq/github.com/nogu3/jarvis-iac
@@ -1160,7 +1175,7 @@ ansible-playbook site.yml --check --diff
 ```
 Expected: `devices.toml` と `rules.toml` の 2 ファイルのみ changed。他が changed なら drift なので先に調査する。
 
-- [ ] **Step 8: 本適用**
+- [ ] **Step 9: 本適用**
 
 ```bash
 cd ~/ghq/github.com/nogu3/jarvis-iac
@@ -1169,7 +1184,7 @@ ansible-playbook site.yml
 ```
 Expected: 上記 2 ファイルが changed、handler `Restart casad (casa config)` が走る
 
-- [ ] **Step 9: ルールが受理されたことを確認**
+- [ ] **Step 10: ルールが受理されたことを確認**
 
 ```bash
 ssh jarvis '~/.local/bin/casad check ~/.config/casa/rules.toml' | python3 -m json.tool | head -20
@@ -1177,7 +1192,7 @@ ssh jarvis 'systemctl --user status casad --no-pager --lines=5'
 ```
 Expected: `"ok": true` と増えたルール数、casad が `active (running)`
 
-- [ ] **Step 10: 窓外では発火しないことを実機で確認**
+- [ ] **Step 11: 窓外では発火しないことを実機で確認**
 
 ```bash
 ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.config/casa/rules.toml --listen-once-mat --now 22:00 2>&1 | tail -20'
@@ -1185,7 +1200,7 @@ ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.conf
 書斎に入る／出るなどして人感イベントを起こす。
 Expected: 扇風機のルールは `rule skipped: outside its active window` の debug ログが出るだけで発火せず、既存の照明ルールは発火する（扇風機は回らない）
 
-- [ ] **Step 11: 窓内では発火することを実機で確認**
+- [ ] **Step 12: 窓内では発火することを実機で確認**
 
 ```bash
 ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.config/casa/rules.toml --listen-once-mat --now 12:00 2>&1 | tail -20'
@@ -1193,7 +1208,7 @@ ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.conf
 書斎から出て不在イベントを起こす。
 Expected: `firing rule` に `書斎 不在で扇風機ON` が出て、**実機の扇風機が回り出す**
 
-- [ ] **Step 12: 21 時の停止を実機で確認**
+- [ ] **Step 13: 21 時の停止を実機で確認**
 
 ```bash
 ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.config/casa/rules.toml --once --now 21:00 2>&1 | tail -20'
@@ -1201,7 +1216,7 @@ ssh jarvis 'export PATH=$HOME/.local/bin:$PATH; RUST_LOG=debug casad run ~/.conf
 Expected: `firing rule` に `扇風機 21時消灯` が出て、**回っている扇風機が止まる**。
 止まっている状態でもう一度実行しても回り出さない（ON/OFF が別コードであることの確認）
 
-- [ ] **Step 13: jarvis-iac をコミット**
+- [ ] **Step 14: jarvis-iac をコミット**
 
 ```bash
 cd ~/ghq/github.com/nogu3/jarvis-iac
@@ -1212,7 +1227,7 @@ git commit -m "feat(casa): 書斎の扇風機を人感連動(6-21時)で追加
 昼間だけ人感連動させ、21 時に無条件で止める。"
 ```
 
-- [ ] **Step 14: drift が消えたことを確認**
+- [ ] **Step 15: drift が消えたことを確認**
 
 ```bash
 cd ~/ghq/github.com/nogu3/jarvis-iac

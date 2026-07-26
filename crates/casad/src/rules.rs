@@ -28,7 +28,21 @@ pub struct RuleFile {
 pub struct Rule {
     pub name: String,
     pub when: Trigger,
+    /// ルールが有効な時間帯。未指定なら常時有効。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<ActiveWindow>,
     pub then: Thens,
+}
+
+/// ルールの有効な時間帯。`from` を含み `to` を含まない半開区間 [from, to)。
+/// `from > to` は日跨ぎ（例 21:00-06:00 = 21:00〜23:59 と 00:00〜05:59）。
+///
+/// HH:MM の書式検証は engine 側（`validate_schedule`）が担う。`Trigger::Time { at }` を
+/// String のまま持ち engine で検証しているのと責務の置き場所を揃える。
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ActiveWindow {
+    pub from: String,
+    pub to: String,
 }
 
 /// 1 ルールのアクション列。TOML では単一テーブルと配列の両方を受ける。
@@ -842,5 +856,79 @@ then = { action = "on" }
             "inner error should survive: {}",
             err.detail
         );
+    }
+
+    #[test]
+    fn parses_active_window() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "昼だけ扇風機"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+active = { from = "06:00", to = "21:00" }
+then = { action = "on", device = "study_fan" }
+"#,
+        )
+        .unwrap();
+        let w = file.rules[0].active.as_ref().expect("active が None");
+        assert_eq!(w.from, "06:00");
+        assert_eq!(w.to, "21:00");
+    }
+
+    #[test]
+    fn active_window_is_none_when_absent() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "常時"
+when = { at = "22:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+        )
+        .unwrap();
+        assert!(file.rules[0].active.is_none());
+    }
+
+    #[test]
+    fn active_window_requires_both_ends() {
+        // 片側だけの窓は解釈が割れるので受け付けない。
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "片側だけ"
+when = { at = "22:00" }
+active = { from = "06:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+    }
+
+    #[test]
+    fn serialized_rule_omits_absent_active_window() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "常時"
+when = { at = "22:00" }
+then = { action = "off", device = "living_aircon" }
+[[rules]]
+name = "昼だけ"
+when = { at = "12:00" }
+active = { from = "06:00", to = "21:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+        )
+        .unwrap();
+        let v = serde_json::to_value(&file.rules).unwrap();
+        // active を持たないルールの JSON は従来どおり（casad check の後方互換）。
+        assert!(v[0].get("active").is_none());
+        assert_eq!(v[1]["active"]["from"], "06:00");
+        assert_eq!(v[1]["active"]["to"], "21:00");
     }
 }

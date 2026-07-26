@@ -212,6 +212,10 @@ Web page / LLM / other client
     loop for ECHONET INF notifications, and `mat listen` in a loop for Matter
     attribute changes via matd's resident Subscribe; `priming: true`
     current-state redeliveries never fire rules)
+  - Per-rule active window (`active = { from = "HH:MM", to = "HH:MM" }`): a rule only fires
+    inside its window. Half-open (`from` inclusive, `to` exclusive), `from` > `to` wraps over
+    midnight, `from` == `to` is a config error, and omitting it means always in effect. It
+    applies to every trigger kind.
   - Firing is dispatched asynchronously to per-device workers (FIFO per device, parallel across devices).
     `enl listen` does not stop even while an action is running. `--once` / `--listen-once` run synchronously.
   - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`

@@ -42,14 +42,16 @@ pub enum Command {
     },
     /// ルールエンジンを起動する。既定は常駐し、時刻トリガ（毎分の境界で評価）と
     /// イベントトリガ（enl listen を回して状変通知に反応）を並行に走らせる。
+    #[command(group = clap::ArgGroup::new("oneshot").args(["once", "listen_once", "listen_once_mat"]))]
     Run {
         /// ルールファイル（rules.toml）のパス
         rules: PathBuf,
         /// 時刻トリガを 1 回だけ評価して終了する（cron 毎分起動、またはデバッグ用）。
         #[arg(long)]
         once: bool,
-        /// 現在時刻を HH:MM で上書きする（`--once` 併用のデバッグ用）。
-        #[arg(long, value_name = "HH:MM", requires = "once")]
+        /// 現在時刻を HH:MM で上書きする（1 回だけ評価する 3 つの経路と併用するデバッグ用）。
+        /// 時刻トリガの評価と、ルールの有効時間帯（active）判定の両方に効く。
+        #[arg(long, value_name = "HH:MM", requires = "oneshot")]
         now: Option<String>,
         /// enl listen を 1 回だけ起動し、得た通知でイベントトリガを評価して終了する
         /// （デバッグ用。通知が来るまでブロックする）。
