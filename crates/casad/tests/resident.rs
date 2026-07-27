@@ -112,3 +112,95 @@ fn resident_event_loop_fires_casa_via_worker() {
     assert!(fired, "casa was not fired via worker within 10s");
     // 明示 kill は不要（KillOnDrop がスコープ終了時に必ず殺す）。
 }
+
+const MATTER_CONFIG: &str = r#"
+version = 1
+
+[devices.study_motion]
+protocol = "matter"
+node_id = "16"
+
+[devices.desk_tape_light]
+protocol = "matter"
+node_id = "6"
+"#;
+
+const MATTER_BURST_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+[[rules]]
+name = "人感ONで点灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 1 }
+then = { action = "on", device = "desk_tape_light" }
+"#;
+
+/// 常駐 Matter リスナは `mat listen` を 1 本のストリームとして維持し、バーストの
+/// 全イベントを取りこぼさない（2026-07-27 の recovered 取りこぼし事象の再発防止）。
+/// mat 代役はバースト 3 行（priming 1 + 実イベント 2）を出した後ブロックし続ける
+/// ため、child の終了を待つ one-shot 実装ではひとつも発火できない。
+#[test]
+fn resident_matter_stream_consumes_burst_without_respawn() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_CONFIG);
+    let rules_path = dir.path().join("rules.toml");
+    std::fs::write(&rules_path, MATTER_BURST_RULES).unwrap();
+
+    let _child = KillOnDrop(
+        std::process::Command::new(env!("CARGO_BIN_EXE_casad"))
+            .args([
+                "run",
+                rules_path.to_str().unwrap(),
+                "--config",
+                config.to_str().unwrap(),
+            ])
+            .env_remove("CASA_CONFIG")
+            .env("CASA_MAT_BIN", fixture("mat_listen_stream.sh"))
+            .env("CASA_BIN", fixture("casa_record.sh"))
+            .env("CASAD_TEST_DIR", dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+
+    // バーストの実イベント 2 件（off → on、同一デバイスなので FIFO）が両方
+    // 発火するまで待つ。casa 代役は 1 呼び出し 2 秒なので 4 秒 + 余裕。
+    let casa_log = dir.path().join("casa.log");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let fired = loop {
+        let log = std::fs::read_to_string(&casa_log).unwrap_or_default();
+        if log.contains("off desk_tape_light") && log.contains("on desk_tape_light") {
+            break true;
+        }
+        if Instant::now() > deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        fired,
+        "burst events were not all fired within 15s: {:?}",
+        std::fs::read_to_string(&casa_log)
+    );
+
+    let log = std::fs::read_to_string(&casa_log).unwrap();
+    // priming（occupancy=1）は発火しない — on は recovered イベントの 1 回だけ。
+    assert_eq!(
+        log.matches("on desk_tape_light").count(),
+        1,
+        "priming event must not fire: {log}"
+    );
+
+    // ストリームは 1 本のみ（イベントごとの再 spawn をしない）で、無期限
+    // ストリーム指定（--count 0）で起動されている。
+    let spawns = std::fs::read_to_string(dir.path().join("mat_spawns.log")).unwrap();
+    let spawn_lines: Vec<&str> = spawns.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(spawn_lines.len(), 1, "mat must be spawned once: {spawns}");
+    assert!(
+        spawn_lines[0].contains("--count 0"),
+        "mat listen must run unbounded: {spawns}"
+    );
+}

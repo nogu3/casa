@@ -478,8 +478,11 @@ fn event_loop<'env>(
     }
 }
 
-/// Matter イベントリスナ。`mat listen` を回し続け、一致ルールをワーカーに積んで
-/// 即再 listen する。mat 起動失敗・matd 不在（exit 13）はバックオフして再試行。
+/// Matter イベントリスナ。常駐 `mat listen --count 0` を 1 本張り、イベントごとに
+/// 一致ルールをワーカーに積む。one-shot の繰り返しでは再 spawn の空白で matd の
+/// broadcast からこぼれる（prime バーストの recovered 昇格を取りこぼし、盲目期間の
+/// 遷移が発火しない — 2026-07-27 の書斎ライト事象）ため、ストリームを維持する。
+/// ストリームが切れたら（matd 再起動・mat 不在等）バックオフして張り直す。
 fn matter_event_loop<'env>(
     file: &'env RuleFile,
     config: &Config,
@@ -487,21 +490,20 @@ fn matter_event_loop<'env>(
     dispatcher: &Dispatcher<'env>,
 ) -> ! {
     loop {
-        match mat::listen_once(mat_bin) {
-            Ok(events) => {
-                // 同上。listen が返った時刻で窓を判定する。
-                let now = Local::now().time();
-                let queued =
-                    dispatcher.dispatch_all(due_matter_event_rules(file, config, &events, now));
-                if queued > 0 {
-                    tracing::debug!(queued, "matter event rule actions queued");
-                }
+        let result = mat::listen_stream(mat_bin, |event| {
+            // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
+            let now = Local::now().time();
+            let queued =
+                dispatcher.dispatch_all(due_matter_event_rules(file, config, &[event], now));
+            if queued > 0 {
+                tracing::debug!(queued, "matter event rule actions queued");
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "mat listen failed; backing off");
-                std::thread::sleep(Duration::from_secs(5));
-            }
+        });
+        match result {
+            Ok(()) => tracing::warn!("mat listen stream ended; backing off"),
+            Err(e) => tracing::warn!(error = %e, "mat listen failed; backing off"),
         }
+        std::thread::sleep(Duration::from_secs(5));
     }
 }
 
@@ -706,6 +708,7 @@ endpoint = 2
             attribute: serde_json::json!(attribute),
             value,
             priming: false,
+            recovered: false,
         }
     }
 

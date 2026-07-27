@@ -188,7 +188,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 | Protocol | CLI | Assumed minimum version | Status |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
-| Matter | `mat` | 1.0.0 (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`; casad event triggers additionally need `listen`, which requires a running `matd`) | Supported |
+| Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`) | Supported |
 | SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
 
 The enl interface that casa calls (it follows enl's shipped releases):
@@ -469,11 +469,18 @@ casad run rules.toml --listen-once-mat
 casad run rules.toml --listen-once-mat --now 22:00
 ```
 
-Event triggers are realized by running the child CLI's `listen` in a loop:
-`enl listen` (waiting for ECHONET INF notifications) for `epc` triggers, and
-`mat listen` (a thin client streaming matd's resident Subscribe; requires a
-running `matd`) for `attribute` triggers. Events with `priming: true` (matd's
-current-state redelivery on (re)subscribe) never fire rules. Binary resolution
+Event triggers are realized via the child CLIs' `listen`: `enl listen`
+(waiting for ECHONET INF notifications, run in a one-shot loop) for `epc`
+triggers, and `mat listen --count 0` (a thin client streaming matd's resident
+Subscribe; requires a running `matd` and mat 1.5.0+) for `attribute` triggers.
+The Matter listener holds one unbounded stream instead of respawning per
+event — matd's broadcast delivery drops events published while no client is
+attached, so a respawn loop would lose the tail of a burst (notably the
+`recovered` events matd promotes from priming diffs after a subscription
+blackout). Events with `priming: true` (matd's current-state redelivery on
+(re)subscribe) never fire rules; `recovered` events arrive as ordinary
+(`priming: false`) events and fire normally. A stream line that is not an
+event (e.g. matd's lag-error line) is logged and skipped. Binary resolution
 and stderr forwarding follow the same conventions as casa
 (`CASA_ENL_BIN` / `CASA_MAT_BIN` / `[binaries]` / `PATH`).
 

@@ -209,9 +209,11 @@ Web page / LLM / other client
 ### Responsibilities the `casad` side takes on (not casa's responsibilities)
 - Evaluation engine for the automation rule DSL (`rules.toml`) — **implemented**:
   - Time triggers (internal scheduler) / event triggers (run `enl listen` in a
-    loop for ECHONET INF notifications, and `mat listen` in a loop for Matter
-    attribute changes via matd's resident Subscribe; `priming: true`
-    current-state redeliveries never fire rules)
+    one-shot loop for ECHONET INF notifications, and hold one unbounded
+    `mat listen --count 0` stream (mat 1.5.0+) for Matter attribute changes via
+    matd's resident Subscribe — respawning per event drops burst tails from
+    matd's broadcast, losing `recovered` events; `priming: true` current-state
+    redeliveries never fire rules, `recovered` events fire normally)
   - Per-rule active window (`active = { from = "HH:MM", to = "HH:MM" }`): a rule only fires
     inside its window. Half-open (`from` inclusive, `to` exclusive), `from` > `to` wraps over
     midnight, `from` == `to` is a config error, and omitting it means always in effect. It
