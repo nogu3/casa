@@ -36,6 +36,7 @@ Protocol-specific CLIs that are meant to be called by casa follow this policy:
 | ECHONET Lite | `enl` | Self-authored, in development (standalone repository) |
 | SwitchBot | `swb` | Self-authored (cloud API v1.1 wrapper, standalone repository). Originally planned around the official CLI (`@switchbot/openapi-cli`), but `swb` unblocked the work first and is what casa's adapter actually calls. `swb` also has a BLE passive-scan plane (`scan`); casa deliberately does **not** integrate it (see the SwitchBot entry under Phase 4). |
 | Matter | `mat` | Self-authored CLI (chip-tool wrapper, standalone repository). casa adapter supported. `mtr` is not used because it collides with the existing network diagnostic tool. |
+| Android TV | `atv` | Self-authored CLI (Android TV Remote protocol v2 client, standalone repository). casa adapter supported. Deliberately minimal scope: `pair` / `status` / idempotent `on` / `off`. |
 
 casa assumes **these exist on `PATH`**.
 
@@ -127,7 +128,7 @@ User / cron / n8n / other orchestrator
 ```
 
 ### Resolving the child CLI binary
-- Default: resolve `enl` / `swb` / `mat` from `PATH`.
+- Default: resolve `enl` / `swb` / `mat` / `atv` from `PATH`.
 - Override: a full path can be specified via an environment variable (`CASA_ENL_BIN`, etc.) or the config file.
 - Startup failure (binary missing / not executable) must be immediately distinguishable via a dedicated exit code.
 
@@ -355,6 +356,7 @@ Each phase defines the following:
 Each addition is one Phase 3-style adapter. Subcommands and the config schema do not change (other than a new value for `protocol`).
 
 - **SwitchBot**: **Supported (cloud control plane only)**. Add an adapter that calls the self-authored `swb` (a SwitchBot cloud API v1.1 wrapper) — **not the official CLI**; `swb` unblocked the work before an official-CLI-based adapter was written, so it is what casa actually dispatches to. Authentication (`SWITCHBOT_TOKEN` / `SWITCHBOT_SECRET`) is handled entirely by `swb` via inherited environment variables; casa passes no credentials of its own. `on`/`off` map to `swb cmd <device_id> turnOn`/`turnOff`. The cloud API has no single-property read/write, so `get`/`set`/`describe` remain unsupported (trait default `None` → exit 14); reading state instead goes through `casa invoke <name> status` (`swb status <device_id>`), and `casa invoke <name> cmd <command> [args...]` sends an arbitrary SwitchBot cloud command (`swb cmd <device_id> <command> [args...]`, `device_id` injected as the positional argument right after the subcommand). `swb`'s BLE passive-scan plane (`scan`) is a separate, fully-local plane that casa **deliberately does not integrate** (decided 2026-07-19). BLE scanning is address-less ambient sensor reception, not the "resolve a name → operate one device" model casa is built on, and its JSONL-stream / `--follow`-resident output contradicts casa's single-shot, stateless, single-JSON contract. casa's SwitchBot support is the cloud control plane only; ambient BLE sensor collection, if ever needed, is a job for casad (resident subscription/cache) or a downstream pipe (`swb scan | jq`) — not casa(bin). This mirrors the existing stance that casa does not wrap `discover`.
+- **Android TV**: **Supported**. Add an adapter that calls the self-authored `atv` (an Android TV Remote protocol v2 client; driven by the living-room REGZA X8900K, which speaks Remote v2 but not ECHONET Lite). In the config, a device is addressed by `host` (IP; atv does no name resolution). The address is injected as `--host` right after the subcommand: `on`/`off` map to `atv on/off --host <host>` (idempotent on the atv side — it reads the power state over the session and sends the power key only when the state differs), and reading state goes through `casa invoke <name> status`. Remote v2 has no single-property read/write or introspection, so `get`/`set`/`describe` remain unsupported (trait default `None` → exit 14). The one-time `atv pair` (reads the on-screen code from stdin) is interactive and is run directly, not through casa — though `casa invoke <name> pair` passes through and works. Pairing credentials (`~/.config/atv/`) are entirely atv's concern; casa passes nothing.
 - **Matter**: **Supported**. Add an adapter that calls the self-authored `mat` (a chip-tool wrapper). Because Matter addresses by (node_id, endpoint, cluster, attribute), casa's single selector `<epc>` is interpreted as `endpoint/cluster/attribute` and assigned to `mat read`/`write`. `on`/`off` invoke the OnOff command (`mat on`/`off`). In the config, a Matter device is addressed by either `node_id` (unicast) or `group` (Matter wire groupcast) — exactly one is required — with `endpoint` optional. Only one variant is added to the Phase 3 adapter trait; the subcommand handlers are unchanged. A `group` device delegates `on`/`off`/`invoke` to `mat group ...` (multicast); `get`/`set`/`describe` are unsupported (groupcast is unacknowledged, exit 14).
 
 ---

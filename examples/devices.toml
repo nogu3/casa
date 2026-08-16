@@ -27,3 +27,9 @@ node_id = "1234"
 protocol = "matter"
 node_id = "5678"
 endpoint = 2
+
+# Android TV device (controlled via `atv`, Android TV Remote protocol v2).
+# host is the TV's IP address (atv does no name resolution; prefer a DHCP reservation).
+[devices.living_tv]
+protocol = "androidtv"
+host = "192.0.2.20"

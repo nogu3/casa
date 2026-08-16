@@ -46,6 +46,11 @@ pub enum Device {
     Switchbot {
         device_id: String,
     },
+    /// Android TV / Google TV（Android TV Remote protocol v2、子 CLI は `atv`）。
+    Androidtv {
+        /// TV の IP アドレス。atv は名前解決しないので IP のみ（DHCP 予約推奨）。
+        host: String,
+    },
     Matter {
         /// unicast 宛先の node_id。`group` と排他（ロード時に検証）。
         #[serde(default)]
@@ -66,6 +71,7 @@ impl Device {
             Device::Echonet { .. } => "echonet",
             Device::Switchbot { .. } => "switchbot",
             Device::Matter { .. } => "matter",
+            Device::Androidtv { .. } => "androidtv",
         }
     }
 }
@@ -179,10 +185,7 @@ pub fn parse(text: &str) -> Result<Config, CasaError> {
 
     // Matter デバイスは node_id / group のちょうど一方が必須（排他）。
     for (name, device) in &config.devices {
-        if let Device::Matter {
-            node_id, group, ..
-        } = device
-        {
+        if let Device::Matter { node_id, group, .. } = device {
             match (node_id, group) {
                 (Some(_), None) | (None, Some(_)) => {}
                 (Some(_), Some(_)) => {
@@ -315,6 +318,33 @@ group = "desk_room_lights"
             }
             other => panic!("unexpected device: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_androidtv_device() {
+        let text = r#"
+version = 1
+[devices.living_tv]
+protocol = "androidtv"
+host = "192.0.2.10"
+"#;
+        let config = parse(text).unwrap();
+        match config.device("living_tv").unwrap() {
+            Device::Androidtv { host } => assert_eq!(host, "192.0.2.10"),
+            other => panic!("unexpected device: {other:?}"),
+        }
+        assert_eq!(config.device("living_tv").unwrap().protocol(), "androidtv");
+    }
+
+    #[test]
+    fn androidtv_without_host_is_config_parse() {
+        let text = r#"
+version = 1
+[devices.living_tv]
+protocol = "androidtv"
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
     }
 
     #[test]

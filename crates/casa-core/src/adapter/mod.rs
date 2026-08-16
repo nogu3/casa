@@ -5,6 +5,7 @@
 //! 2. その variant の引数を組むアダプタを実装し、`adapter_for` に 1 行足す。
 //! 3. アダプタのテストを追加する。
 
+pub mod androidtv;
 pub mod echonet;
 pub mod matter;
 pub mod switchbot;
@@ -62,6 +63,8 @@ pub fn adapter_for(device: &Device) -> Option<&'static dyn Adapter> {
         Device::Matter { .. } => Some(&matter::MatterAdapter),
         // SwitchBot: 自作 `swb`（クラウド API v1.1 ラッパ）を呼ぶ。公式 CLI ではない。
         Device::Switchbot { .. } => Some(&switchbot::SwitchbotAdapter),
+        // Android TV: 自作 `atv`（Android TV Remote protocol v2 の薄い CLI）を呼ぶ。
+        Device::Androidtv { .. } => Some(&androidtv::AndroidtvAdapter),
     }
 }
 
@@ -88,6 +91,15 @@ mod tests {
         };
         let adapter = adapter_for(&device).unwrap();
         assert_eq!(adapter.get(&device, "1/onoff/on-off").unwrap().bin, "mat");
+    }
+
+    #[test]
+    fn androidtv_devices_dispatch_to_androidtv_adapter() {
+        let device = Device::Androidtv {
+            host: "192.0.2.10".into(),
+        };
+        let adapter = adapter_for(&device).unwrap();
+        assert_eq!(adapter.power(&device, true).unwrap().bin, "atv");
     }
 
     #[test]

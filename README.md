@@ -54,7 +54,7 @@ required fields, and unknown protocols are already checked at load time). In
 addition, it lists protocols that are valid as config but have no adapter yet —
 which would fail at runtime with `protocol_unsupported` (exit 14) — under
 `warnings`. All protocols currently in the `Device` enum (echonet / matter /
-switchbot) have an adapter, so `warnings` is empty for any config built from
+switchbot / androidtv) have an adapter, so `warnings` is empty for any config built from
 them; the field exists for the (currently hypothetical) case of a protocol
 that parses but has no adapter implementation yet:
 
@@ -190,6 +190,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
 | Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`) | Supported |
 | SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
+| Android TV | `atv` | 0.1.0 (`pair` / `status` / `on` / `off` and exit code conventions) | Supported (self-authored, Android TV Remote protocol v2 client; on / off / invoke) |
 
 The enl interface that casa calls (it follows enl's shipped releases):
 
@@ -273,6 +274,32 @@ process. `get` / `set` / `describe` are not supported for SwitchBot (exit 14
 `protocol_unsupported`) because the SwitchBot cloud API has no single-property
 read/write and swb has no property-map introspection.
 
+The atv interface that casa calls (the address is injected as a `--host` flag
+right after the subcommand):
+
+```
+# casa on <name> / casa off <name>
+atv on --host <host>
+atv off --host <host>
+# casa invoke <name> status  (read the power state)
+atv status --host <host>
+```
+
+```toml
+[devices.living_tv]
+protocol = "androidtv"
+host = "192.0.2.20"       # IP address; atv does no name resolution
+```
+
+`on` / `off` are idempotent on the atv side: it reads the TV's power state over
+the Remote v2 session and sends the power key only when the state differs.
+`get` / `set` / `describe` are not supported for Android TV (exit 14
+`protocol_unsupported`) — the Remote v2 protocol has no single-property
+read/write or introspection. The one-time pairing (`atv pair`, which reads the
+on-screen code from stdin) is interactive, so run `atv` directly for it rather
+than through casa; `casa invoke <name> pair` works too since invoke passes
+through. Power-on over LAN requires the TV's network-standby setting.
+
 ### `on` / `off` support and mapping targets
 
 The shortcut mappings are hardcoded inside casa as UX, not as protocol logic.
@@ -282,6 +309,7 @@ The shortcut mappings are hardcoded inside casa as UX, not as protocol logic.
 | ECHONET Lite | Yes | Yes | set EPC `0x80` to `0x30` (ON) / `0x31` (OFF) |
 | Matter | Yes | Yes | invoke the On / Off commands of the OnOff cluster (`mat on`/`off`, the endpoint is `endpoint` from the config) |
 | SwitchBot | Yes | Yes | send `swb cmd <device_id> turnOn` / `turnOff` |
+| Android TV | Yes | Yes | run `atv on` / `off --host <host>` (idempotent: atv sends the power key only when the state differs) |
 
 `get` / `set` have no SwitchBot equivalent (the cloud API has no single-property
 read/write), so both return exit 14 `protocol_unsupported` for that protocol;
@@ -289,9 +317,9 @@ reading state instead goes through `casa invoke <name> status` (see below).
 
 `describe` follows the same shape: ECHONET Lite uses `enl describe` (property
 map), Matter uses `mat describe` (endpoint / cluster introspection of the
-node), and SwitchBot is not supported (`casa describe` returns exit 14, and
-`casa list --describe` yields `properties: null`) because swb has no
-property-map introspection.
+node), and SwitchBot / Android TV are not supported (`casa describe` returns
+exit 14, and `casa list --describe` yields `properties: null`) because neither
+swb nor atv has property-map introspection.
 
 Color-temperature changes have no dedicated subcommand in casa (`casa color-temp`
 was removed in v0.6.0; see the "Verb promotion criteria" section). Calling
@@ -553,4 +581,20 @@ casa off entry_lock
 
 # 2. Confirm the full status can be read (there is no single-property get for SwitchBot)
 casa invoke entry_lock status
+```
+
+In an environment with real atv and a paired Android TV (pair once with
+`atv pair --host <ip>` directly — it reads the on-screen code from stdin),
+verify the following:
+
+```bash
+# 1. Confirm the power state can be read
+casa invoke living_tv status
+
+# 2. Confirm the TV turns on / off (idempotent: repeat to see "changed": false)
+casa on living_tv
+casa off living_tv
+
+# 3. Turn the TV fully unreachable (unplug) and confirm atv's exit code 3 propagates
+casa on living_tv; echo $?
 ```
