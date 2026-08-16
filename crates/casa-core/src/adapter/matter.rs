@@ -96,7 +96,11 @@ impl Adapter for MatterAdapter {
         let MatterAddr::Node { node_id, .. } = address(device)? else {
             return None;
         };
-        let mut args = vec!["read".to_string(), "--node".to_string(), node_id.to_string()];
+        let mut args = vec![
+            "read".to_string(),
+            "--node".to_string(),
+            node_id.to_string(),
+        ];
         args.extend(selector_flags(property)?);
         Some(invocation(args))
     }
@@ -105,7 +109,11 @@ impl Adapter for MatterAdapter {
         let MatterAddr::Node { node_id, .. } = address(device)? else {
             return None;
         };
-        let mut args = vec!["write".to_string(), "--node".to_string(), node_id.to_string()];
+        let mut args = vec![
+            "write".to_string(),
+            "--node".to_string(),
+            node_id.to_string(),
+        ];
         args.extend(selector_flags(property)?);
         args.push("--value".to_string());
         args.push(value.to_string());
@@ -127,8 +135,7 @@ impl Adapter for MatterAdapter {
         let cmd = if on { "on" } else { "off" };
         match address(device)? {
             MatterAddr::Node { node_id, endpoint } => {
-                let mut args =
-                    vec![cmd.to_string(), "--node".to_string(), node_id.to_string()];
+                let mut args = vec![cmd.to_string(), "--node".to_string(), node_id.to_string()];
                 push_endpoint(&mut args, endpoint);
                 Some(invocation(args))
             }
@@ -155,8 +162,11 @@ impl Adapter for MatterAdapter {
     fn invoke(&self, device: &Device, command: &str, args: &[String]) -> Option<Invocation> {
         match address(device)? {
             MatterAddr::Node { node_id, endpoint } => {
-                let mut all =
-                    vec![command.to_string(), "--node".to_string(), node_id.to_string()];
+                let mut all = vec![
+                    command.to_string(),
+                    "--node".to_string(),
+                    node_id.to_string(),
+                ];
                 push_endpoint(&mut all, endpoint);
                 all.extend(args.iter().cloned());
                 Some(invocation(all))
