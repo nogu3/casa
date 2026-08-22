@@ -507,8 +507,11 @@ attached, so a respawn loop would lose the tail of a burst (notably the
 `recovered` events matd promotes from priming diffs after a subscription
 blackout). Events with `priming: true` (matd's current-state redelivery on
 (re)subscribe) never fire rules; `recovered` events arrive as ordinary
-(`priming: false`) events and fire normally. A stream line that is not an
-event (e.g. matd's lag-error line) is logged and skipped. Binary resolution
+(`priming: false`) events and fire normally. `equals` is compared against the
+event's `value` as a JSON value, type included: an integer and a float never
+match (`equals = 1.0` does not match an event value of `1`), so write numeric
+values exactly as matd reports them — integers as integers. A stream line that
+is not an event (e.g. matd's lag-error line) is logged and skipped. Binary resolution
 and stderr forwarding follow the same conventions as casa
 (`CASA_ENL_BIN` / `CASA_MAT_BIN` / `[binaries]` / `PATH`).
 
