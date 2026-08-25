@@ -10,10 +10,39 @@
 //! ワーカー数は起動時の rules.toml から固定（ホットリロードは無い）。
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::Scope;
+use std::time::{Duration, Instant};
 
-use crate::rules::{Rule, RuleFile, Then};
+use crate::rules::{Rule, RuleFile, Settings, Then, Trigger};
+
+/// デバイス別ワーカーの送信抑制ポリシー（issue #5: off→on 連射でのプラグ固着緩和）。
+///
+/// - `off_grace`: **イベント由来**の off を保留する猶予。保留中に on が来たら off は
+///   破棄される（conflation）。時刻トリガの off には適用しない（取り消したいケースが
+///   無く、消灯が遅れるだけ）。
+/// - `min_gap`: 同一デバイスへの連続コマンド送信の最小間隔。
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerPolicy {
+    pub off_grace: Duration,
+    pub min_gap: Duration,
+}
+
+impl WorkerPolicy {
+    /// 抑制なし（従来挙動）。テストの土台用。
+    #[cfg(test)]
+    pub const ZERO: WorkerPolicy = WorkerPolicy {
+        off_grace: Duration::ZERO,
+        min_gap: Duration::ZERO,
+    };
+
+    pub fn from_settings(s: &Settings) -> Self {
+        WorkerPolicy {
+            off_grace: Duration::from_secs(s.off_grace_secs),
+            min_gap: Duration::from_secs(s.min_gap_secs),
+        }
+    }
+}
 
 /// rules.toml の全 `then` アクションの対象名の distinct 集合（BTreeSet で順序決定的）。
 pub fn distinct_devices(file: &RuleFile) -> BTreeSet<&str> {
@@ -44,6 +73,7 @@ impl<'env> Dispatcher<'env> {
     pub fn new<'scope, F>(
         scope: &'scope Scope<'scope, 'env>,
         devices: impl IntoIterator<Item = &'env str>,
+        policy: WorkerPolicy,
         run: F,
     ) -> Self
     where
@@ -52,11 +82,7 @@ impl<'env> Dispatcher<'env> {
         let mut senders = HashMap::new();
         for device in devices {
             let (tx, rx) = mpsc::channel::<Job<'env>>();
-            scope.spawn(move || {
-                for job in rx {
-                    run(job);
-                }
-            });
+            scope.spawn(move || worker_loop(rx, policy, run));
             senders.insert(device.to_string(), tx);
         }
         Dispatcher { senders }
@@ -99,6 +125,88 @@ impl<'env> Dispatcher<'env> {
     }
 }
 
+/// この job に off-grace を適用するか。イベント由来（人感などの連射源）の off のみ。
+/// 時刻トリガの off は即時実行（保留しても取り消される見込みが無く、遅れるだけ）。
+fn grace_applies(job: &Job<'_>, policy: WorkerPolicy) -> bool {
+    !policy.off_grace.is_zero()
+        && matches!(job.then, Then::Off { .. })
+        && matches!(
+            job.rule.when,
+            Trigger::Event { .. } | Trigger::MatterEvent { .. }
+        )
+}
+
+/// 1 デバイス分のワーカーループ。FIFO 実行に off-grace / conflation / min-gap を重ねる。
+///
+/// - イベント由来の off は `pending_off` に予約し、grace 満了まで送らない。
+/// - on が来たら予約 off を破棄して on を実行（off→on 連射がデバイスに届かない）。
+/// - 時刻トリガの off は即実行し、予約 off も破棄（off は送信済みになるので冗長）。
+/// - invoke は予約に触らず実行（直交・v1）。
+/// - チャネル切断（シャットダウン / テストの同期点）では予約 off を grace を待たずに
+///   フラッシュして終了する（「終了前にキューを掃く」契約の維持。off は要求済みで、
+///   以後 on は来ない）。
+fn worker_loop<'env, F: Fn(Job<'env>)>(rx: Receiver<Job<'env>>, policy: WorkerPolicy, run: F) {
+    let mut pending_off: Option<(Instant, Job<'env>)> = None;
+    let mut last_sent: Option<Instant> = None;
+
+    // min-gap を尊重して実行し、送信時刻を記録する。
+    let exec = |job: Job<'env>, last_sent: &mut Option<Instant>| {
+        if let Some(last) = *last_sent {
+            let since = last.elapsed();
+            if since < policy.min_gap {
+                std::thread::sleep(policy.min_gap - since);
+            }
+        }
+        run(job);
+        *last_sent = Some(Instant::now());
+    };
+
+    loop {
+        let received = match pending_off {
+            Some((deadline, job)) => {
+                match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(next) => Some(next),
+                    Err(RecvTimeoutError::Timeout) => {
+                        // 予約満了: on に取り消されなかった off を実行する。
+                        pending_off = None;
+                        exec(job, &mut last_sent);
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => None,
+                }
+            }
+            None => rx.recv().ok(),
+        };
+
+        let Some(job) = received else {
+            // 切断: 予約 off をフラッシュして終了。
+            if let Some((_, job)) = pending_off.take() {
+                tracing::debug!(rule = %job.rule.name, device = job.then.device(),
+                    "flushing pending off on shutdown");
+                exec(job, &mut last_sent);
+            }
+            return;
+        };
+
+        if grace_applies(&job, policy) {
+            tracing::debug!(rule = %job.rule.name, device = job.then.device(),
+                grace_ms = policy.off_grace.as_millis() as u64, "holding off in grace");
+            pending_off = Some((Instant::now() + policy.off_grace, job));
+            continue;
+        }
+        match job.then {
+            Then::On { .. } | Then::Off { .. } => {
+                if let Some((_, held)) = pending_off.take() {
+                    tracing::debug!(rule = %held.rule.name, device = held.then.device(),
+                        superseded_by = job.then.action_name(), "discarding pending off");
+                }
+                exec(job, &mut last_sent);
+            }
+            Then::Invoke { .. } => exec(job, &mut last_sent),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +246,189 @@ mod tests {
                     .collect(),
             ),
         }
+    }
+
+    /// イベントトリガ（人感など）のテスト用ルール。アクションは指定の Then。
+    fn event_rule(name: &str, then: Then) -> Rule {
+        Rule {
+            name: name.to_string(),
+            when: Trigger::Event {
+                device: "sensor".to_string(),
+                epc: "0x80".to_string(),
+                equals: "0x30".to_string(),
+            },
+            active: None,
+            then: Thens::One(then),
+        }
+    }
+
+    fn on(device: &str) -> Then {
+        Then::On {
+            device: device.to_string(),
+        }
+    }
+
+    fn off(device: &str) -> Then {
+        Then::Off {
+            device: device.to_string(),
+        }
+    }
+
+    /// 実行されたアクション名を記録するログ。
+    fn action_log() -> Mutex<Vec<&'static str>> {
+        Mutex::new(Vec::new())
+    }
+
+    #[test]
+    fn event_off_in_grace_is_discarded_by_on() {
+        // イベント由来の off は grace 中は送信されず、on が来たら破棄される
+        // （off→on 連射がデバイスに届かない。issue #5 の本体）。
+        let off_rule = event_rule("leave", off("dev_a"));
+        let on_rule = event_rule("return", on("dev_a"));
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_millis(200),
+            min_gap: Duration::ZERO,
+        };
+        let log = action_log();
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |j: Job| {
+                log.lock().unwrap().push(j.then.action_name());
+            });
+            assert_eq!(d.dispatch(&off_rule), 1);
+            std::thread::sleep(Duration::from_millis(50));
+            assert_eq!(d.dispatch(&on_rule), 1);
+            drop(d); // 破棄漏れがあれば切断時フラッシュで off が記録される
+        });
+        assert_eq!(*log.lock().unwrap(), ["on"]);
+    }
+
+    #[test]
+    fn event_off_fires_after_grace_expires() {
+        // on に取り消されなければ、grace 満了で off が実行される（消灯はちゃんと起きる）。
+        let off_rule = event_rule("leave", off("dev_a"));
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_millis(100),
+            min_gap: Duration::ZERO,
+        };
+        let log = action_log();
+        let fired_at = Mutex::new(None::<Duration>);
+        let started = Instant::now();
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |j: Job| {
+                log.lock().unwrap().push(j.then.action_name());
+                *fired_at.lock().unwrap() = Some(started.elapsed());
+            });
+            assert_eq!(d.dispatch(&off_rule), 1);
+            // grace 満了は Sender 生存中に起きる（切断フラッシュとの区別）。
+            std::thread::sleep(Duration::from_millis(250));
+            assert_eq!(*log.lock().unwrap(), ["off"]);
+            drop(d);
+        });
+        let elapsed = fired_at.lock().unwrap().unwrap();
+        assert!(
+            elapsed >= Duration::from_millis(100),
+            "off fired before grace expired: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn time_triggered_off_runs_immediately_without_grace() {
+        // 時刻トリガの off は grace の対象外（22:00 消灯が遅れない）。
+        let off_rule = Rule {
+            name: "bedtime".to_string(),
+            when: Trigger::Time {
+                at: "22:00".to_string(),
+            },
+            active: None,
+            then: Thens::One(off("dev_a")),
+        };
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_secs(10),
+            min_gap: Duration::ZERO,
+        };
+        let log = action_log();
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |j: Job| {
+                log.lock().unwrap().push(j.then.action_name());
+            });
+            assert_eq!(d.dispatch(&off_rule), 1);
+            // Sender 生存のまま短時間で実行されること（切断フラッシュではない）。
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while log.lock().unwrap().is_empty() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(*log.lock().unwrap(), ["off"]);
+            drop(d);
+        });
+    }
+
+    #[test]
+    fn min_gap_spaces_consecutive_commands() {
+        let first = event_rule("first", on("dev_a"));
+        let second = event_rule("second", on("dev_a"));
+        let policy = WorkerPolicy {
+            off_grace: Duration::ZERO,
+            min_gap: Duration::from_millis(100),
+        };
+        let sent = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |_j: Job| {
+                sent.lock().unwrap().push(Instant::now());
+            });
+            assert_eq!(d.dispatch(&first), 1);
+            assert_eq!(d.dispatch(&second), 1);
+            drop(d);
+        });
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 2);
+        let gap = sent[1] - sent[0];
+        assert!(gap >= Duration::from_millis(100), "gap too small: {gap:?}");
+    }
+
+    #[test]
+    fn shutdown_flushes_pending_off_without_waiting_grace() {
+        // 切断時は grace を待たずに予約 off を実行して終了する（キューを掃く契約）。
+        let off_rule = event_rule("leave", off("dev_a"));
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_secs(30),
+            min_gap: Duration::ZERO,
+        };
+        let log = action_log();
+        let started = Instant::now();
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |j: Job| {
+                log.lock().unwrap().push(j.then.action_name());
+            });
+            assert_eq!(d.dispatch(&off_rule), 1);
+            drop(d);
+        });
+        assert_eq!(*log.lock().unwrap(), ["off"]);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "shutdown waited for grace"
+        );
+    }
+
+    #[test]
+    fn repeated_event_offs_conflate_into_one() {
+        // off 連射は 1 件の予約にまとまり、満了時に 1 回だけ実行される。
+        let off_rule = event_rule("leave", off("dev_a"));
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_millis(100),
+            min_gap: Duration::ZERO,
+        };
+        let log = action_log();
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, ["dev_a"], policy, |j: Job| {
+                log.lock().unwrap().push(j.then.action_name());
+            });
+            assert_eq!(d.dispatch(&off_rule), 1);
+            std::thread::sleep(Duration::from_millis(30));
+            assert_eq!(d.dispatch(&off_rule), 1);
+            std::thread::sleep(Duration::from_millis(250));
+            drop(d);
+        });
+        assert_eq!(*log.lock().unwrap(), ["off"]);
     }
 
     #[test]
@@ -192,7 +483,7 @@ then = { action = "off", device = "desk_light" }
         let r = multi_rule("fanout", &["dev_a", "dev_b"]);
         let seen = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a", "dev_b"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a", "dev_b"], WorkerPolicy::ZERO, |j: Job| {
                 seen.lock().unwrap().push(j.then.device().to_string());
             });
             assert_eq!(d.dispatch(&r), 2);
@@ -226,7 +517,7 @@ then = { action = "off", device = "desk_light" }
         };
         let log = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a"], WorkerPolicy::ZERO, |j: Job| {
                 if matches!(j.then, Then::On { .. }) {
                     std::thread::sleep(Duration::from_millis(100));
                 }
@@ -248,7 +539,7 @@ then = { action = "off", device = "desk_light" }
         let r = multi_rule("parallel", &["dev_a", "dev_b"]);
         let done = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a", "dev_b"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a", "dev_b"], WorkerPolicy::ZERO, |j: Job| {
                 if j.then.device() == "dev_a" {
                     std::thread::sleep(Duration::from_millis(300));
                 }
@@ -265,7 +556,7 @@ then = { action = "off", device = "desk_light" }
         // ワーカーの無い対象は積めない（防御分岐）。積めた件数だけ数える。
         let r = multi_rule("partial", &["dev_a", "no_such_device"]);
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a"], |_j: Job| {});
+            let d = Dispatcher::new(s, ["dev_a"], WorkerPolicy::ZERO, |_j: Job| {});
             assert_eq!(d.dispatch(&r), 1);
             drop(d);
         });
@@ -277,7 +568,7 @@ then = { action = "off", device = "desk_light" }
         let fast = rule("second", "dev_a");
         let log = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a"], WorkerPolicy::ZERO, |j: Job| {
                 // 先行ジョブを遅くしても FIFO が保たれる（並列なら second が先に完走する）。
                 if j.rule.name == "slow_first" {
                     std::thread::sleep(Duration::from_millis(100));
@@ -296,7 +587,7 @@ then = { action = "off", device = "desk_light" }
         let r = rule("slow", "dev_a");
         let log = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a"], WorkerPolicy::ZERO, |j: Job| {
                 std::thread::sleep(Duration::from_millis(300));
                 log.lock().unwrap().push(j.rule.name.clone());
             });
@@ -318,7 +609,7 @@ then = { action = "off", device = "desk_light" }
         let fast = rule("fast", "dev_b");
         let done = Mutex::new(Vec::new());
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a", "dev_b"], |j: Job| {
+            let d = Dispatcher::new(s, ["dev_a", "dev_b"], WorkerPolicy::ZERO, |j: Job| {
                 if j.then.device() == "dev_a" {
                     std::thread::sleep(Duration::from_millis(300));
                 }
@@ -336,7 +627,7 @@ then = { action = "off", device = "desk_light" }
     fn dispatch_to_unknown_device_counts_zero() {
         let r = rule("ghost", "no_such_device");
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a"], |_j: Job| {});
+            let d = Dispatcher::new(s, ["dev_a"], WorkerPolicy::ZERO, |_j: Job| {});
             assert_eq!(d.dispatch(&r), 0);
             drop(d);
         });
@@ -349,7 +640,7 @@ then = { action = "off", device = "desk_light" }
         let a = multi_rule("a", &["dev_a", "dev_b"]);
         let b = multi_rule("b", &["dev_a", "dev_b", "no_such_device"]);
         std::thread::scope(|s| {
-            let d = Dispatcher::new(s, ["dev_a", "dev_b"], |_j: Job| {});
+            let d = Dispatcher::new(s, ["dev_a", "dev_b"], WorkerPolicy::ZERO, |_j: Job| {});
             // a: 2 件とも積める。b: dev_a, dev_b は積めるが no_such_device は積めない → 2 件。
             assert_eq!(d.dispatch_all(vec![&a, &b]), 4);
             drop(d);

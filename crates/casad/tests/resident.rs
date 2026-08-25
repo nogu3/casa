@@ -125,8 +125,15 @@ protocol = "matter"
 node_id = "6"
 "#;
 
+// off-grace / min-gap を 0 にして従来の FIFO 挙動で検証する。本テストの目的は
+// 「1 本のストリームがバースト全件を取りこぼさない」ことで、既定の off-grace が
+// 効くと off が on に conflate されて（それ自体は issue #5 の正しい動作）
+// バースト消費の検証にならないため。
 const MATTER_BURST_RULES: &str = r#"
 version = 1
+[settings]
+off_grace_secs = 0
+min_gap_secs = 0
 [[rules]]
 name = "人感OFFで消灯"
 when = { device = "study_motion", attribute = "occupancy", equals = 0 }

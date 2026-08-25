@@ -21,7 +21,31 @@ pub const SUPPORTED_VERSION: u32 = 1;
 pub struct RuleFile {
     pub version: u32,
     #[serde(default)]
+    pub settings: Settings,
+    #[serde(default)]
     pub rules: Vec<Rule>,
+}
+
+/// エンジン全体の動作設定（`[settings]` テーブル、省略可）。
+/// 単位は秒の整数（humantime 形式のための依存は増やさない）。
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Settings {
+    /// イベント由来の off を保留する猶予秒。保留中に同一デバイスへ on が来たら
+    /// off は破棄される（スマートプラグの off→on 連射固着の緩和。issue #5）。
+    /// 時刻トリガの off には適用しない（取り消したいケースが無く、遅れるだけ）。
+    pub off_grace_secs: u64,
+    /// 同一デバイスへの連続コマンド送信の最小間隔秒。
+    pub min_gap_secs: u64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            off_grace_secs: 30,
+            min_gap_secs: 2,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -354,6 +378,35 @@ eoj = "0x029001"
 "#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn settings_default_when_absent() {
+        let file = parse(VALID).unwrap();
+        assert_eq!(file.settings.off_grace_secs, 30);
+        assert_eq!(file.settings.min_gap_secs, 2);
+    }
+
+    #[test]
+    fn parses_explicit_settings() {
+        let file = parse(
+            r#"
+version = 1
+[settings]
+off_grace_secs = 10
+min_gap_secs = 0
+"#,
+        )
+        .unwrap();
+        assert_eq!(file.settings.off_grace_secs, 10);
+        assert_eq!(file.settings.min_gap_secs, 0);
+    }
+
+    #[test]
+    fn partial_settings_fill_remaining_defaults() {
+        let file = parse("version = 1\n[settings]\noff_grace_secs = 5\n").unwrap();
+        assert_eq!(file.settings.off_grace_secs, 5);
+        assert_eq!(file.settings.min_gap_secs, 2);
     }
 
     #[test]

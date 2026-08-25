@@ -221,6 +221,12 @@ Web page / LLM / other client
     applies to every trigger kind.
   - Firing is dispatched asynchronously to per-device workers (FIFO per device, parallel across devices).
     `enl listen` does not stop even while an action is running. `--once` / `--listen-once` run synchronously.
+  - Worker send policy (`[settings]`, optional): an **event-triggered** `off` is held for
+    `off_grace_secs` (default 30) and discarded if an `on` for the same device arrives inside the
+    window — a rapid off→on pair never reaches the device (mitigates cheap-plug firmware latch-up,
+    issue #5). Time-triggered `off`s fire immediately. `min_gap_secs` (default 2) is the minimum
+    interval between consecutive commands to one device. `--once` / `--listen-once` paths bypass
+    the workers, so neither applies there.
   - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`
     (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`). `then` accepts either a
     single table or an array of actions; array members are dispatched per target device (same device = declaration

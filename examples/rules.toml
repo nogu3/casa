@@ -3,6 +3,15 @@
 
 version = 1
 
+# Optional engine settings (defaults shown). An event-triggered `off` is held for
+# off_grace_secs and discarded if an `on` for the same device arrives in the
+# meantime (the device never sees a rapid off→on pair); time-triggered `off`s are
+# exempt and fire immediately. min_gap_secs is the minimum interval between
+# consecutive commands sent to the same device. Set to 0 to disable either.
+[settings]
+off_grace_secs = 30
+min_gap_secs = 2
+
 # Event trigger: when living_aircon's EPC 0x80 (power) becomes 0x30 (ON), turn on the bedroom light.
 [[rules]]
 name = "bedroom light ON when aircon starts"

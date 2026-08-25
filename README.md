@@ -476,6 +476,35 @@ error too: since `to` is exclusive, `when = { at = "21:00" }` combined with
 and `casad run` reject it up front instead of loading a rule that silently does
 nothing.
 
+### Engine settings (`[settings]`)
+
+An optional `[settings]` table tunes how the per-device workers send commands
+(motivated by a cheap Matter smart plug whose firmware latches into a broken
+state — attribute reports `on` while the physical output stays off — when an
+`off` and an `on` land close together; see issue #5):
+
+```toml
+[settings]
+off_grace_secs = 30   # default 30; 0 disables the grace
+min_gap_secs = 2      # default 2; 0 disables the spacing
+```
+
+- `off_grace_secs` — an **event-triggered** `off` (from an ECHONET or Matter
+  event, e.g. a motion sensor) is not sent immediately: the worker holds it for
+  this many seconds. If an `on` for the same device arrives inside the window,
+  the held `off` is discarded — the device never sees the `off`→`on` pair.
+  Repeated `off`s collapse into one reservation (the deadline is refreshed).
+  Time-triggered `off`s are exempt and still fire immediately (there is no
+  later `on` that would want to cancel them; a grace would only delay them).
+  On shutdown a held `off` is flushed immediately instead of waiting out the
+  grace.
+- `min_gap_secs` — minimum interval between consecutive commands actually sent
+  to the same device. Applies to every action kind; other devices' workers are
+  unaffected.
+
+`--once` / `--listen-once` / `--listen-once-mat` run synchronously without the
+workers, so neither setting applies there — debug invocations stay immediate.
+
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON
 casad check rules.toml

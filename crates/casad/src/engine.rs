@@ -14,7 +14,7 @@ use chrono::{Local, NaiveTime, Timelike};
 use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
-use crate::dispatch::{distinct_devices, Dispatcher, Job};
+use crate::dispatch::{distinct_devices, Dispatcher, Job, WorkerPolicy};
 use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Trigger};
 use crate::{casa_runner, enl, mat};
 
@@ -424,7 +424,8 @@ pub fn run(
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
     // 異デバイス並列）。listen / tick ループはアクション完了を待たない。
     std::thread::scope(|s| {
-        let dispatcher = Dispatcher::new(s, distinct_devices(file), move |job: Job| {
+        let policy = WorkerPolicy::from_settings(&file.settings);
+        let dispatcher = Dispatcher::new(s, distinct_devices(file), policy, move |job: Job| {
             run_one(job, config_path);
         });
         if has_enl_events {
