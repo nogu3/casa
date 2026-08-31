@@ -5,6 +5,7 @@ mod engine;
 mod enl;
 mod mat;
 mod rules;
+mod state_cache;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;

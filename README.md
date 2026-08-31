@@ -502,8 +502,16 @@ min_gap_secs = 2      # default 2; 0 disables the spacing
   to the same device. Applies to every action kind; other devices' workers are
   unaffected.
 
+Independently of those settings, an `off` to a Matter device is skipped as a
+no-op when the resident `mat listen` stream has recently (within 10 minutes)
+observed that device's OnOff state as already off — a Thread-traffic
+optimization for high-frequency triggers like motion sensors (issue #3). `on`
+is **never** skipped: some firmware latches `on` in its report while the
+physical output is off (issue #5), so a skipped `on` could leave a light dark.
+A skipped `off` is logged at DEBUG.
+
 `--once` / `--listen-once` / `--listen-once-mat` run synchronously without the
-workers, so neither setting applies there — debug invocations stay immediate.
+workers, so none of the above applies there — debug invocations stay immediate.
 
 ```bash
 # Parse and validate the rules, returning casad's interpretation as JSON

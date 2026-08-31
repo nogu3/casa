@@ -227,6 +227,11 @@ Web page / LLM / other client
     issue #5). Time-triggered `off`s fire immediately. `min_gap_secs` (default 2) is the minimum
     interval between consecutive commands to one device. `--once` / `--listen-once` paths bypass
     the workers, so neither applies there.
+  - Off no-op skip (issue #3): a Matter `off` is skipped when the resident `mat listen` stream
+    recently (10 min TTL) observed the target's OnOff state as already off — Thread-traffic
+    optimization. **`on` is never skipped** (firmware can latch `on` in reports while physically
+    off, issue #5; trusting that would leave a light dark). Skips are DEBUG-logged; `--once`
+    paths bypass this too.
   - On firing, casa is called as a child process (`casad run` / `check`). `then` supports `on` / `off` / `invoke`
     (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`). `then` accepts either a
     single table or an array of actions; array members are dispatched per target device (same device = declaration

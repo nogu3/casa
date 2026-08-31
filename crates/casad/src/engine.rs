@@ -15,8 +15,38 @@ use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
 use crate::dispatch::{distinct_devices, Dispatcher, Job, WorkerPolicy};
-use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Trigger};
+use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Then, Trigger};
+use crate::state_cache::StateCache;
 use crate::{casa_runner, enl, mat};
+
+/// off no-op スキップ（issue #3）の鮮度 TTL。listen 切断でキャッシュがステイル化
+/// したまま「消えない」事故を防ぐ保険 — これを超えた観測は無かったことにして
+/// コマンドを普通に撃つ。
+const OFF_NOOP_TTL: Duration = Duration::from_secs(600);
+
+/// この job を「対象は既に消灯済み」としてスキップしてよいか（issue #3）。
+/// 条件: アクションが Matter デバイスへの `off`、かつキャッシュの最終観測が
+/// 消灯 (false) で TTL 内。**`on` には絶対に適用しない**（NL68 の state=on
+/// 物理消灯固着 — 報告状態を信じて on を省くと点かない事故になる）。
+/// group 宛・alias node_id・ECHONET 等は条件を満たせず常に false（= 撃つ）。
+pub(crate) fn should_skip_noop_off(job: &Job<'_>, config: &Config, cache: &StateCache) -> bool {
+    let Then::Off { device } = job.then else {
+        return false;
+    };
+    let Ok(Device::Matter {
+        node_id: Some(node_id),
+        endpoint,
+        ..
+    }) = config.device(device)
+    else {
+        return false;
+    };
+    let Some(node) = parse_node_id(node_id) else {
+        return false;
+    };
+    let ep = endpoint.map(u64::from).unwrap_or(1);
+    cache.is_off_fresh(node, ep, OFF_NOOP_TTL)
+}
 
 /// `casad run` の挙動。
 pub struct RunOpts {
@@ -423,9 +453,19 @@ pub fn run(
     // scope で借用を渡し、Arc/clone なしにループ群 + ワーカー群を並行させる。
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
     // 異デバイス並列）。listen / tick ループはアクション完了を待たない。
+    // state_cache は listen ストリーム（書き手）とワーカー（読み手）で共有し、
+    // 実行直前に off の no-op を判定する（issue #3。--once 系はワーカーを通らない
+    // ので off-grace / min-gap と同じく適用外）。
+    let cache = StateCache::new();
+    let cache = &cache;
     std::thread::scope(|s| {
         let policy = WorkerPolicy::from_settings(&file.settings);
         let dispatcher = Dispatcher::new(s, distinct_devices(file), policy, move |job: Job| {
+            if should_skip_noop_off(&job, config, cache) {
+                tracing::debug!(rule = %job.rule.name, device = job.then.device(),
+                    "skipped no-op off (cached state already off)");
+                return;
+            }
             run_one(job, config_path);
         });
         if has_enl_events {
@@ -434,7 +474,7 @@ pub fn run(
         }
         if has_matter_events {
             let d = dispatcher.clone();
-            s.spawn(move || matter_event_loop(file, config, mat_bin, &d));
+            s.spawn(move || matter_event_loop(file, config, mat_bin, &d, cache));
         }
         time_loop(file, &dispatcher);
     });
@@ -489,9 +529,13 @@ fn matter_event_loop<'env>(
     config: &Config,
     mat_bin: &str,
     dispatcher: &Dispatcher<'env>,
+    cache: &StateCache,
 ) -> ! {
     loop {
         let result = mat::listen_stream(mat_bin, |event| {
+            // off no-op スキップ用の最終値キャッシュを先に更新する（priming 含む —
+            // 現在値の再配達はキャッシュには有効な知識）。
+            cache.record(&event);
             // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
             let now = Local::now().time();
             let queued =
@@ -720,6 +764,85 @@ name = "人感OFFで消灯"
 when = { device = "study_motion", attribute = "occupancy", equals = 0 }
 then = { action = "off", device = "desk_tape_light" }
 "#;
+
+    fn onoff_event(node: u64, ep: u64, on: bool) -> mat::Event {
+        mat::Event {
+            node_id: node,
+            endpoint: ep,
+            cluster: serde_json::json!("onoff"),
+            attribute: serde_json::json!("on-off"),
+            value: serde_json::json!(on),
+            priming: false,
+            recovered: false,
+        }
+    }
+
+    #[test]
+    fn noop_off_skips_only_with_fresh_cached_off() {
+        let cfg = config_matter();
+        let file = rules(MATTER_RULE); // then = off desk_tape_light (node 6, ep 既定 1)
+        let rule = &file.rules[0];
+        let job = Job {
+            rule,
+            then: &rule.then.actions()[0],
+        };
+        let cache = StateCache::new();
+        // 観測なし → スキップしない。
+        assert!(!should_skip_noop_off(&job, &cfg, &cache));
+        // 消灯を観測 → スキップ。
+        cache.record(&onoff_event(6, 1, false));
+        assert!(should_skip_noop_off(&job, &cfg, &cache));
+        // 点灯に更新 → スキップしない。
+        cache.record(&onoff_event(6, 1, true));
+        assert!(!should_skip_noop_off(&job, &cfg, &cache));
+    }
+
+    #[test]
+    fn noop_off_respects_configured_endpoint() {
+        let cfg = config_matter();
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "outlet off"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "outlet2" }
+"#,
+        ); // outlet2 = node 5678, endpoint 2
+        let rule = &file.rules[0];
+        let job = Job {
+            rule,
+            then: &rule.then.actions()[0],
+        };
+        let cache = StateCache::new();
+        cache.record(&onoff_event(5678, 1, false)); // 別 endpoint の観測
+        assert!(!should_skip_noop_off(&job, &cfg, &cache));
+        cache.record(&onoff_event(5678, 2, false));
+        assert!(should_skip_noop_off(&job, &cfg, &cache));
+    }
+
+    #[test]
+    fn noop_skip_never_applies_to_on_actions() {
+        let cfg = config_matter();
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "人感ONで点灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 1 }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        );
+        let rule = &file.rules[0];
+        let job = Job {
+            rule,
+            then: &rule.then.actions()[0],
+        };
+        let cache = StateCache::new();
+        // キャッシュが「点灯中」でも on は絶対にスキップしない（NL68 固着対策）。
+        cache.record(&onoff_event(6, 1, true));
+        assert!(!should_skip_noop_off(&job, &cfg, &cache));
+    }
 
     #[test]
     fn matter_event_matches_on_node_attribute_value() {
