@@ -536,7 +536,10 @@ attached, so a respawn loop would lose the tail of a burst (notably the
 `recovered` events matd promotes from priming diffs after a subscription
 blackout). Events with `priming: true` (matd's current-state redelivery on
 (re)subscribe) never fire rules; `recovered` events arrive as ordinary
-(`priming: false`) events and fire normally. `equals` is compared against the
+(`priming: false`) events and fire normally. This matters for battery-powered
+sensors (e.g. motion sensors): they send no keep-alives, so their subscriptions
+lapse periodically, and transitions that happen in that blackout (such as a
+room going vacant) still reach the rules as `recovered` events. `equals` is compared against the
 event's `value` as a JSON value, type included: an integer and a float never
 match (`equals = 1.0` does not match an event value of `1`), so write numeric
 values exactly as matd reports them — integers as integers. A stream line that
