@@ -188,7 +188,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 | Protocol | CLI | Assumed minimum version | Status |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
-| Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`) | Supported |
+| Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`); with mat 1.36.0+ the stream also carries Matter *event* lines (`event` key, no `attribute`) — casad 1.8.1+ recognizes and ignores them at debug level (no rule syntax for event triggers yet) | Supported |
 | SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
 | Android TV | `atv` | 0.1.0 (`pair` / `status` / `on` / `off` and exit code conventions) | Supported (self-authored, Android TV Remote protocol v2 client; on / off / invoke) |
 

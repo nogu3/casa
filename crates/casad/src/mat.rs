@@ -39,6 +39,58 @@ pub struct Event {
     pub recovered: bool,
 }
 
+/// `mat listen` の Matter イベント行（mat 1.36.0+、`event` キーあり・`attribute` 無し）。
+/// casad はまだイベントをトリガに使わない（ルール構文が無い）ので発火せず、debug ログ
+/// だけ残す。wildcard 購読では起動系イベント（start-up / boot-reason /
+/// access-control-entry-changed）の priming が数十行まとめて来るため、warn で流すと
+/// ノイズになる。
+#[derive(Debug, Deserialize)]
+pub struct MatterEvent {
+    pub node_id: u64,
+    pub endpoint: u64,
+    pub cluster: serde_json::Value,
+    pub event: serde_json::Value,
+    #[serde(default)]
+    pub priming: bool,
+}
+
+/// `mat listen` の 1 行の分類。
+#[derive(Debug)]
+enum Line {
+    /// 属性行（発火対象）。
+    Attribute(Event),
+    /// Matter イベント行（発火しない、debug のみ）。
+    MatterEvent(MatterEvent),
+    /// どちらでもない行（matd の lag エラー行 `{"error":...}` 等）。
+    Other(serde_json::Error),
+}
+
+/// 属性行と Matter イベント行を `attribute` / `event` キーの有無で分ける。両方無い・
+/// 必須フィールド欠落は `Other`。
+fn classify_line(line: &str) -> Line {
+    let has_key = |key: &str| {
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(line)
+            .map(|m| m.contains_key(key))
+            .unwrap_or(false)
+    };
+    if has_key("attribute") {
+        return match serde_json::from_str::<Event>(line) {
+            Ok(ev) => Line::Attribute(ev),
+            Err(e) => Line::Other(e),
+        };
+    }
+    if has_key("event") {
+        return match serde_json::from_str::<MatterEvent>(line) {
+            Ok(ev) => Line::MatterEvent(ev),
+            Err(e) => Line::Other(e),
+        };
+    }
+    match serde_json::from_str::<Event>(line) {
+        Ok(ev) => Line::Attribute(ev),
+        Err(e) => Line::Other(e),
+    }
+}
+
 /// 常駐 `mat listen --count 0 --timeout-ms 0` を spawn し、stdout の NDJSON を
 /// 1 行ずつ読んでイベントごとに `on_event` を呼ぶ。child が終了するまで戻らない。
 ///
@@ -90,9 +142,10 @@ pub fn listen_stream(bin: &str, on_event: impl FnMut(Event)) -> Result<(), CasaE
     Ok(())
 }
 
-/// NDJSON ストリームを 1 行ずつ読み、パースできた行を `on_event` へ渡す。
-/// 空行は無視。パース不能行（matd の lag エラー行 `{"error":...}` 等）は
-/// warn を残して skip し、ストリームは続行する。EOF / 読み取りエラーで戻る。
+/// NDJSON ストリームを 1 行ずつ読み、属性行を `on_event` へ渡す。
+/// 空行は無視。Matter イベント行（`event` キー、mat 1.36.0+）は発火せず debug のみ。
+/// パース不能行（matd の lag エラー行 `{"error":...}` 等）は warn を残して skip し、
+/// ストリームは続行する。EOF / 読み取りエラーで戻る。
 fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(Event)) {
     for line in reader.lines() {
         let line = match line {
@@ -105,8 +158,8 @@ fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(Event)) {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Event>(&line) {
-            Ok(ev) => {
+        match classify_line(&line) {
+            Line::Attribute(ev) => {
                 // ルールに一致しないイベントも追えるよう、受信した全イベントを debug で残す。
                 tracing::debug!(
                     node_id = ev.node_id,
@@ -120,7 +173,17 @@ fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(Event)) {
                 );
                 on_event(ev);
             }
-            Err(e) => {
+            Line::MatterEvent(ev) => {
+                tracing::debug!(
+                    node_id = ev.node_id,
+                    endpoint = ev.endpoint,
+                    cluster = %ev.cluster,
+                    event = %ev.event,
+                    priming = ev.priming,
+                    "matter event line received; not a trigger yet, ignored"
+                );
+            }
+            Line::Other(e) => {
                 tracing::warn!(error = %e, line, "mat listen stdout line is not an event; skipping");
             }
         }
@@ -250,5 +313,34 @@ mod tests {
         let mut seen = Vec::new();
         read_events(&lines[..], |ev| seen.push(ev.recovered));
         assert_eq!(seen, vec![true, false]);
+    }
+
+    /// event 行（mat 1.36.0+、`event` キーあり・`attribute` 無し）は属性イベントではない
+    /// ので発火しないが、不正行でもないので warn を出さず debug で流す（wildcard 購読
+    /// では起動系イベントの priming が数十行まとめて来る）。
+    #[test]
+    fn read_events_ignores_matter_event_lines_silently() {
+        let lines = b"{\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"attribute\":\"state-value\",\"value\":false,\"priming\":false}\n{\"timestamp\":\"2026-09-07T00:37:33+09:00\",\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"event\":\"state-change\",\"event_number\":590151,\"priority\":\"info\",\"data\":{\"state-value\":false},\"priming\":true}\n{\"node_id\":19,\"endpoint\":0,\"cluster\":\"basicinformation\",\"event\":\"start-up\",\"event_number\":1,\"priority\":\"critical\",\"priming\":true}\n{\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"attribute\":\"state-value\",\"value\":true,\"priming\":false}\n";
+        let mut seen = Vec::new();
+        read_events(&lines[..], |ev| seen.push(ev.value.clone()));
+        assert_eq!(
+            seen,
+            vec![serde_json::json!(false), serde_json::json!(true)]
+        );
+        // 分類そのものも固定する: event 行は MatterEvent、属性行は Attribute、その他は Other。
+        assert!(matches!(
+            classify_line(
+                r#"{"node_id":19,"endpoint":1,"cluster":"switch","event":"initial-press","event_number":3,"priority":"info","data":{"new-position":1},"priming":false}"#
+            ),
+            Line::MatterEvent(MatterEvent {
+                node_id: 19,
+                endpoint: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            classify_line(r#"{"error":{"kind":"lagged","detail":"..."}}"#),
+            Line::Other(_)
+        ));
     }
 }
