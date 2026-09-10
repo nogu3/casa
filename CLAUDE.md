@@ -214,7 +214,11 @@ Web page / LLM / other client
     `mat listen --count 0` stream (mat 1.5.0+) for Matter attribute changes via
     matd's resident Subscribe — respawning per event drops burst tails from
     matd's broadcast, losing `recovered` events; `priming: true` current-state
-    redeliveries never fire rules, `recovered` events fire normally)
+    redeliveries never fire rules, `recovered` events fire normally). With mat 1.36.0+ the same stream carries
+    Matter device *event* lines (`event` key); `when = { device, event, data? }`
+    fires on them (`data` is a partial, type-strict match; `priming` never fires;
+    the resident stream de-duplicates by `event_number` per (node, endpoint,
+    cluster) with a `start-up` reset)
   - Per-rule active window (`active = { from = "HH:MM", to = "HH:MM" }`): a rule only fires
     inside its window. Half-open (`from` inclusive, `to` exclusive), `from` > `to` wraps over
     midnight, `from` == `to` is a config error, and omitting it means always in effect. It

@@ -188,7 +188,7 @@ casa assumes that the protocol-specific CLIs exist on `PATH`.
 | Protocol | CLI | Assumed minimum version | Status |
 |---|---|---|---|
 | ECHONET Lite | `enl` | 1.5.0 for both casa / casad (a CLI that takes the address as positional arguments; has `listen`, with a coexistence model of resident listen and one-shot 3610) | Supported |
-| Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`); with mat 1.36.0+ the stream also carries Matter *event* lines (`event` key, no `attribute`) — casad 1.8.1+ recognizes and ignores them at debug level (no rule syntax for event triggers yet) | Supported |
+| Matter | `mat` | 1.0.0 for casa (`read` / `write` / `invoke` / `on` / `off` / `color-temp` / `describe`); 1.5.0 for casad event triggers (`listen --count 0` unbounded streaming, which requires a running `matd`); with mat 1.36.0+ the stream also carries Matter *event* lines (`event` key, no `attribute`) — casad 1.9.0+ fires `event` triggers on them (1.8.1 only recognized and ignored them) | Supported |
 | SwitchBot | `swb` | 0.1.0 (`status` / `cmd` subcommands and exit code conventions) | Supported (self-authored, cloud API v1.1 wrapper; on / off / invoke). BLE scan plane not yet integrated. |
 | Android TV | `atv` | 0.1.0 (`pair` / `status` / `on` / `off` and exit code conventions) | Supported (self-authored, Android TV Remote protocol v2 client; on / off / invoke) |
 
@@ -426,7 +426,7 @@ name = "bedroom light off at 22:00"
 when = { at = "22:00" }
 then = { action = "off", device = "bedroom_light" }
 
-# Matter event trigger: when study_motion's occupancy becomes 0 (vacant), turn off the desk light
+# Matter attribute trigger: when study_motion's occupancy becomes 0 (vacant), turn off the desk light
 [[rules]]
 name = "desk light off when study becomes vacant"
 when = { device = "study_motion", attribute = "occupancy", equals = 0 }
@@ -449,6 +449,19 @@ name = "circulate air in the study while nobody is there"
 when   = { device = "study_motion", attribute = "occupancy", equals = 0 }
 active = { from = "06:00", to = "21:00" }
 then   = { action = "on", device = "study_fan" }
+
+# Matter device event trigger (mat 1.36.0+): a Generic Switch double press turns
+# the living light off. `data` is a partial match on the event's fields.
+[[rules]]
+name = "living light off on double press"
+when = { device = "wall_switch", event = "multi-press-complete", data = { "total-number-of-presses-counted" = 2 } }
+then = { action = "off", device = "living_light" }
+
+# The same door sensor as an event trigger instead of an attribute trigger.
+[[rules]]
+name = "closet light on when the door opens"
+when = { device = "closet_door", event = "state-change", data = { "state-value" = true } }
+then = { action = "on", device = "closet_light" }
 ```
 
 `then` accepts either a single table or an array of them. With an array, each
@@ -466,7 +479,7 @@ wraps over midnight (`{ from = "21:00", to = "06:00" }` covers 21:00–23:59 and
 00:00–05:59). `from` equal to `to` is a config error, because an empty window
 and an all-day window cannot be told apart. Omit `active` and the rule is in
 effect at all times. The window applies to every trigger kind — time, ECHONET
-event, and Matter event — and is evaluated against local time when the trigger
+event, Matter attribute, and Matter device event — and is evaluated against local time when the trigger
 matches. A rule dropped because it is outside its window is logged at debug
 level.
 
@@ -526,7 +539,7 @@ casad run rules.toml --once --now 22:00
 # Debug: run enl listen exactly once to evaluate event triggers
 casad run rules.toml --listen-once
 
-# Debug: run mat listen exactly once to evaluate Matter event triggers
+# Debug: run mat listen exactly once to evaluate Matter attribute / device event triggers
 casad run rules.toml --listen-once-mat
 
 # Debug: evaluate as if it were 22:00 (works with --once / --listen-once / --listen-once-mat).
@@ -537,7 +550,7 @@ casad run rules.toml --listen-once-mat --now 22:00
 Event triggers are realized via the child CLIs' `listen`: `enl listen`
 (waiting for ECHONET INF notifications, run in a one-shot loop) for `epc`
 triggers, and `mat listen --count 0` (a thin client streaming matd's resident
-Subscribe; requires a running `matd` and mat 1.5.0+) for `attribute` triggers.
+Subscribe; requires a running `matd` and mat 1.5.0+) for `attribute` and `event` triggers.
 The Matter listener holds one unbounded stream instead of respawning per
 event — matd's broadcast delivery drops events published while no client is
 attached, so a respawn loop would lose the tail of a burst (notably the
@@ -554,6 +567,36 @@ values exactly as matd reports them — integers as integers. A stream line that
 is not an event (e.g. matd's lag-error line) is logged and skipped. Binary resolution
 and stderr forwarding follow the same conventions as casa
 (`CASA_ENL_BIN` / `CASA_MAT_BIN` / `[binaries]` / `PATH`).
+
+#### Matter device event triggers (`event`)
+
+With mat 1.36.0+ the `mat listen` stream also carries device-originated
+*event* lines (`event` key instead of `attribute`): Generic Switch presses
+(`initial-press`, `multi-press-complete`, ...), `booleanstate`'s `state-change`,
+BasicInformation's `start-up`, and so on. `when = { device, event, data? }`
+fires on them:
+
+- `device` must be a Matter device with a `node_id` (groupcast devices are
+  rejected by `casad check`); a configured `endpoint` narrows the match, as for
+  attribute triggers.
+- `event` is the event name in chip-tool notation, compared case-insensitively;
+  an event mat does not know is reported as its numeric id, which you can write
+  as a decimal string (`event = "0"`).
+- `data` is optional and a **partial match**: every key you write must be
+  present in the event's `data` with an equal JSON value (type included — `2`
+  does not match `2.0`); keys you do not write are ignored. Omit `data` to fire
+  on the event name alone. A rule with `data` never matches an event line that
+  carries no `data` at all, and `data = {}` is a config error.
+- `priming: true` event lines (matd's redelivery on (re)subscribe — start-up
+  events come in a burst of dozens after a matd restart) never fire, same as
+  attributes.
+- The resident stream de-duplicates event lines by Matter's `event_number`:
+  per (node, endpoint, cluster), a line whose number is not greater than the
+  last one seen is dropped at debug level. A `start-up` event resets that
+  node's watermarks (a factory reset restarts the counter). The watermark is
+  in-memory only and `--listen-once-mat` does not apply it.
+- An event-triggered `off` gets the same `off_grace_secs` treatment as other
+  event-triggered `off`s.
 
 ## Development
 

@@ -24,12 +24,27 @@ name = "bedroom light off at 22:00"
 when = { at = "22:00" }
 then = { action = "off", device = "bedroom_light" }
 
-# Matter event trigger: when living_light's onoff attribute becomes true, ... (mat listen via matd).
+# Matter attribute trigger: when living_light's onoff attribute becomes true, ... (mat listen via matd).
 # equals is compared against the event's JSON value (number / bool / string).
 [[rules]]
 name = "example matter event trigger"
 when = { device = "living_light", attribute = "onoff", equals = true }
 then = { action = "on", device = "bedroom_light" }
+
+# Matter device event trigger (mat 1.36.0+): fire on an event line from mat listen
+# (`event` key) instead of an attribute change. `data` is optional and a partial
+# match: only the keys you write are compared (as JSON values, type included);
+# other keys in the event are ignored. Omit `data` to match on the event name alone.
+# `data = {}` is a config error.
+[[rules]]
+name = "example double press turns off the bedroom light"
+when = { device = "wall_switch", event = "multi-press-complete", data = { "total-number-of-presses-counted" = 2 } }
+then = { action = "off", device = "bedroom_light" }
+
+[[rules]]
+name = "example log when the sensor reboots"
+when = { device = "door_sensor", event = "start-up" }
+then = { action = "invoke", device = "bedroom_light", command = "color-temp", args = ["--kelvin", "2700"] }
 
 # Multiple actions for one trigger. Same-device actions keep declaration order;
 # different-device actions run in parallel. `then = []` is a config error.

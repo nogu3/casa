@@ -28,6 +28,15 @@ protocol = "matter"
 node_id = "5678"
 endpoint = 2
 
+[devices.wall_switch]
+protocol = "matter"
+node_id = "25"
+endpoint = 2
+
+[devices.door_sensor]
+protocol = "matter"
+node_id = "19"
+
 # Android TV device (controlled via `atv`, Android TV Remote protocol v2).
 # host is the TV's IP address (atv does no name resolution; prefer a DHCP reservation).
 [devices.living_tv]
