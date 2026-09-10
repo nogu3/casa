@@ -27,7 +27,7 @@ then = { action = "off", device = "bedroom_light" }
 # Matter attribute trigger: when living_light's onoff attribute becomes true, ... (mat listen via matd).
 # equals is compared against the event's JSON value (number / bool / string).
 [[rules]]
-name = "example matter event trigger"
+name = "example matter attribute trigger"
 when = { device = "living_light", attribute = "onoff", equals = true }
 then = { action = "on", device = "bedroom_light" }
 
