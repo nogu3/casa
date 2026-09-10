@@ -76,7 +76,7 @@ then = { action = "invoke", device = "some_device", command = "some-command" }
 
 - `Trigger::MatterEvent { device, attribute, equals }` を `Trigger::MatterAttribute` に改名。
 - 新 variant `Trigger::MatterEvent { device: String, event: String, data: Option<serde_json::Map<String, serde_json::Value>> }`。untagged enum の判別キーは `epc` / `attribute` / `event` / `at` で互いに素。
-- `RuleFile::validate` で `MatterEvent` にも `check_matter_device` を適用し、`data = {}` を `ConfigParse` エラーにする。
+- `RuleFile::validate` で `MatterEvent` にも `check_matter_device` を適用する。`data = {}` は `parse`（`then` 空の検査と同じ場所）で `ConfigParse` エラーにする（`check` / `run` とも通る）。
 
 ### `mat.rs`
 
@@ -87,8 +87,8 @@ then = { action = "invoke", device = "some_device", command = "some-command" }
 
 ### `engine.rs`
 
-- 属性用の `matter_event_matches` / `due_matter_event_rules` を `matter_attribute_matches` / `due_matter_attribute_rules` に改名。
-- イベント用 `matter_event_matches(rule, config, &MatterEvent) -> bool` と `due_matter_event_rules` を追加。名前突合は属性と共通のヘルパ（`name_matches`）に寄せる。
+- 属性用の `matter_event_matches` を `matter_attribute_matches` に改名。`due_matter_event_rules` は `due_matter_rules(file, config, &[Incoming], now)` にして属性行・イベント行の混在バッチを 1 関数で突合する。
+- イベント用 `matter_event_matches(rule, config, &MatterEvent) -> bool` を追加。発火元 (node_id, endpoint) の突合は `source_matches`、名前突合は `name_matches` として属性と共有する。
 - `matter_event_loop`: `Incoming::Attribute` → 従来処理（state cache 更新 + 属性ルール）、`Incoming::Event` → デデュープ → イベントルール発火。デデュープ状態はループが所有する（ストリームスレッドだけが触るので Mutex 不要）。
 - `drain_matter_events_once`（`--listen-once-mat`）: 1 バッチで属性・イベント両方のルールを評価する。デデュープは off-grace / min-gap と同じくワーカーを通らない同期パスには適用しない。
 - `has_matter_events` の判定に両 variant を含める。
