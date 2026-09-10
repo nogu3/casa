@@ -176,7 +176,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
                 .map(|t| (t.hour(), t.minute()) == now_hm)
                 .unwrap_or(false),
             Trigger::Event { .. } => false,
-            Trigger::MatterEvent { .. } => false,
+            Trigger::MatterAttribute { .. } => false,
         })
         .filter(|r| active_or_log(r, now))
         .collect()
@@ -285,10 +285,14 @@ pub fn drain_events_once(
     ))
 }
 
-/// Matter イベントトリガのルールが、与えられた mat listen イベント 1 件に一致するか。
+/// Matter 属性トリガのルールが、与えられた mat listen の属性行 1 件に一致するか。
 /// priming（matd 再購読時の現在値再配達）は状変ではないので無条件で不一致。
-pub fn matter_event_matches(rule: &Rule, config: &Config, event: &mat::Event) -> bool {
-    let Trigger::MatterEvent {
+pub fn matter_attribute_matches(
+    rule: &Rule,
+    config: &Config,
+    event: &mat::AttributeChange,
+) -> bool {
+    let Trigger::MatterAttribute {
         device,
         attribute,
         equals,
@@ -328,18 +332,21 @@ fn attribute_matches(event_attr: &serde_json::Value, rule_attr: &str) -> bool {
     }
 }
 
-/// 1 バッチの mat イベントに一致する Matter イベントトリガのルールを返す
-/// （rules.toml 記載順・重複なし）。
-fn due_matter_event_rules<'a>(
+/// 1 バッチの mat listen 行に一致する Matter 由来トリガのルールを返す（rules.toml 記載順・重複なし）。
+fn due_matter_rules<'a>(
     file: &'a RuleFile,
     config: &Config,
-    events: &[mat::Event],
+    events: &[mat::AttributeChange],
     now: NaiveTime,
 ) -> Vec<&'a Rule> {
     file.rules
         .iter()
-        .filter(|r| matches!(r.when, Trigger::MatterEvent { .. }))
-        .filter(|r| events.iter().any(|e| matter_event_matches(r, config, e)))
+        .filter(|r| matches!(r.when, Trigger::MatterAttribute { .. }))
+        .filter(|r| {
+            events
+                .iter()
+                .any(|e| matter_attribute_matches(r, config, e))
+        })
         .filter(|r| active_or_log(r, now))
         .collect()
 }
@@ -357,7 +364,7 @@ pub fn drain_matter_events_once(
     // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
     // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
     Ok(fire_all(
-        due_matter_event_rules(file, config, &events, now_or(now)),
+        due_matter_rules(file, config, &events, now_or(now)),
         config_path,
     ))
 }
@@ -448,7 +455,7 @@ pub fn run(
     let has_matter_events = file
         .rules
         .iter()
-        .any(|r| matches!(r.when, Trigger::MatterEvent { .. }));
+        .any(|r| matches!(r.when, Trigger::MatterAttribute { .. }));
 
     // scope で借用を渡し、Arc/clone なしにループ群 + ワーカー群を並行させる。
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・
@@ -538,8 +545,7 @@ fn matter_event_loop<'env>(
             cache.record(&event);
             // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
             let now = Local::now().time();
-            let queued =
-                dispatcher.dispatch_all(due_matter_event_rules(file, config, &[event], now));
+            let queued = dispatcher.dispatch_all(due_matter_rules(file, config, &[event], now));
             if queued > 0 {
                 tracing::debug!(queued, "matter event rule actions queued");
             }
@@ -745,8 +751,8 @@ endpoint = 2
         endpoint: u64,
         attribute: &str,
         value: serde_json::Value,
-    ) -> mat::Event {
-        mat::Event {
+    ) -> mat::AttributeChange {
+        mat::AttributeChange {
             node_id,
             endpoint,
             cluster: serde_json::json!("occupancysensing"),
@@ -765,8 +771,8 @@ when = { device = "study_motion", attribute = "occupancy", equals = 0 }
 then = { action = "off", device = "desk_tape_light" }
 "#;
 
-    fn onoff_event(node: u64, ep: u64, on: bool) -> mat::Event {
-        mat::Event {
+    fn onoff_event(node: u64, ep: u64, on: bool) -> mat::AttributeChange {
+        mat::AttributeChange {
             node_id: node,
             endpoint: ep,
             cluster: serde_json::json!("onoff"),
@@ -845,45 +851,45 @@ then = { action = "on", device = "desk_tape_light" }
     }
 
     #[test]
-    fn matter_event_matches_on_node_attribute_value() {
+    fn matter_attribute_matches_on_node_attribute_value() {
         let file = rules(MATTER_RULE);
         let cfg = config_matter();
         let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
-        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+        assert!(matter_attribute_matches(&file.rules[0], &cfg, &ev));
     }
 
     #[test]
-    fn matter_event_attribute_is_case_insensitive() {
+    fn matter_attribute_is_case_insensitive() {
         let file = rules(MATTER_RULE);
         let cfg = config_matter();
         let ev = mat_event(16, 1, "Occupancy", serde_json::json!(0));
-        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+        assert!(matter_attribute_matches(&file.rules[0], &cfg, &ev));
     }
 
     #[test]
-    fn matter_event_does_not_match_on_mismatch() {
+    fn matter_attribute_does_not_match_on_mismatch() {
         let file = rules(MATTER_RULE);
         let cfg = config_matter();
         // node_id 違い。
-        assert!(!matter_event_matches(
+        assert!(!matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(6, 1, "occupancy", serde_json::json!(0))
         ));
         // attribute 違い。
-        assert!(!matter_event_matches(
+        assert!(!matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(16, 1, "onoff", serde_json::json!(0))
         ));
         // 値違い（在室 ON）。
-        assert!(!matter_event_matches(
+        assert!(!matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(16, 1, "occupancy", serde_json::json!(1))
         ));
         // 型違い（数値 0 vs 文字列 "0"）。
-        assert!(!matter_event_matches(
+        assert!(!matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(16, 1, "occupancy", serde_json::json!("0"))
@@ -891,17 +897,17 @@ then = { action = "on", device = "desk_tape_light" }
     }
 
     #[test]
-    fn matter_event_priming_never_matches() {
+    fn matter_attribute_priming_never_matches() {
         let file = rules(MATTER_RULE);
         let cfg = config_matter();
         let mut ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
         ev.priming = true;
         // matd 再購読時の現在値再配達で発火してはならない。
-        assert!(!matter_event_matches(&file.rules[0], &cfg, &ev));
+        assert!(!matter_attribute_matches(&file.rules[0], &cfg, &ev));
     }
 
     #[test]
-    fn matter_event_endpoint_filter_applies_only_when_configured() {
+    fn matter_attribute_endpoint_filter_applies_only_when_configured() {
         let cfg = config_matter();
         // endpoint = 2 を持つ outlet2 のルール: endpoint 一致のみマッチ。
         let file = rules(
@@ -913,19 +919,19 @@ when = { device = "outlet2", attribute = "onoff", equals = true }
 then = { action = "off", device = "desk_tape_light" }
 "#,
         );
-        assert!(matter_event_matches(
+        assert!(matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(5678, 2, "onoff", serde_json::json!(true))
         ));
-        assert!(!matter_event_matches(
+        assert!(!matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(5678, 1, "onoff", serde_json::json!(true))
         ));
         // study_motion は endpoint 未指定なのでどの endpoint でもマッチ。
         let file = rules(MATTER_RULE);
-        assert!(matter_event_matches(
+        assert!(matter_attribute_matches(
             &file.rules[0],
             &cfg,
             &mat_event(16, 3, "occupancy", serde_json::json!(0))
@@ -947,11 +953,11 @@ then = { action = "off", device = "desk_tape_light" }
         );
         let mut ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
         ev.attribute = serde_json::json!(0);
-        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+        assert!(matter_attribute_matches(&file.rules[0], &cfg, &ev));
     }
 
     #[test]
-    fn due_matter_event_rules_ignores_echonet_and_time_rules() {
+    fn due_matter_rules_ignores_echonet_and_time_rules() {
         let cfg = config_matter();
         let file = rules(
             r#"
@@ -967,7 +973,7 @@ then = { action = "off", device = "desk_tape_light" }
 "#,
         );
         let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
-        let due = due_matter_event_rules(&file, &cfg, &[ev], at(12, 0));
+        let due = due_matter_rules(&file, &cfg, &[ev], at(12, 0));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].name, "人感OFFで消灯");
     }
@@ -1199,7 +1205,7 @@ then = { action = "on", device = "living_aircon" }
     }
 
     #[test]
-    fn due_matter_event_rules_respects_active_window() {
+    fn due_matter_rules_respects_active_window() {
         let file = rules(
             r#"
 version = 1
@@ -1211,14 +1217,14 @@ then = { action = "on", device = "desk_tape_light" }
 "#,
         );
         let cfg = config_matter();
-        let inside = due_matter_event_rules(
+        let inside = due_matter_rules(
             &file,
             &cfg,
             &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
             at(12, 0),
         );
         assert_eq!(inside.len(), 1);
-        let outside = due_matter_event_rules(
+        let outside = due_matter_rules(
             &file,
             &cfg,
             &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
@@ -1247,7 +1253,7 @@ then = { action = "on", device = "desk_tape_light" }
         let matter_file = rules(MATTER_RULE);
         let matter_cfg = config_matter();
         assert_eq!(
-            due_matter_event_rules(
+            due_matter_rules(
                 &matter_file,
                 &matter_cfg,
                 &[mat_event(16, 1, "occupancy", serde_json::json!(0))],

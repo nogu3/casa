@@ -19,9 +19,9 @@ use serde::Deserialize;
 
 use casa_core::error::{CasaError, ErrorKind};
 
-/// `mat listen` の 1 イベント行。casad が使うフィールドのみ拾う。
+/// `mat listen` の属性変化行（`attribute` キーあり）。casad が使うフィールドのみ拾う。
 #[derive(Debug, Deserialize)]
-pub struct Event {
+pub struct AttributeChange {
     pub node_id: u64,
     pub endpoint: u64,
     /// chip-tool 名（例 "occupancysensing"）または未知 ID の数値。突合には使わず
@@ -58,7 +58,7 @@ pub struct MatterEvent {
 #[derive(Debug)]
 enum Line {
     /// 属性行（発火対象）。
-    Attribute(Event),
+    Attribute(AttributeChange),
     /// Matter イベント行（発火しない、debug のみ）。
     MatterEvent(MatterEvent),
     /// どちらでもない行（matd の lag エラー行 `{"error":...}` 等）。
@@ -74,7 +74,7 @@ fn classify_line(line: &str) -> Line {
             .unwrap_or(false)
     };
     if has_key("attribute") {
-        return match serde_json::from_str::<Event>(line) {
+        return match serde_json::from_str::<AttributeChange>(line) {
             Ok(ev) => Line::Attribute(ev),
             Err(e) => Line::Other(e),
         };
@@ -85,7 +85,7 @@ fn classify_line(line: &str) -> Line {
             Err(e) => Line::Other(e),
         };
     }
-    match serde_json::from_str::<Event>(line) {
+    match serde_json::from_str::<AttributeChange>(line) {
         Ok(ev) => Line::Attribute(ev),
         Err(e) => Line::Other(e),
     }
@@ -96,7 +96,7 @@ fn classify_line(line: &str) -> Line {
 ///
 /// フィルタは付けず全ノードを受け、突合は casad 側で行う（enl と同じ分担）。
 /// 戻りは常に異常系（matd 不在 exit 13 等）なので、呼ぶ側が backoff して再起動する。
-pub fn listen_stream(bin: &str, on_event: impl FnMut(Event)) -> Result<(), CasaError> {
+pub fn listen_stream(bin: &str, on_event: impl FnMut(AttributeChange)) -> Result<(), CasaError> {
     tracing::debug!(bin, "spawning mat listen stream");
 
     let mut child = Command::new(bin)
@@ -146,7 +146,7 @@ pub fn listen_stream(bin: &str, on_event: impl FnMut(Event)) -> Result<(), CasaE
 /// 空行は無視。Matter イベント行（`event` キー、mat 1.36.0+）は発火せず debug のみ。
 /// パース不能行（matd の lag エラー行 `{"error":...}` 等）は warn を残して skip し、
 /// ストリームは続行する。EOF / 読み取りエラーで戻る。
-fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(Event)) {
+fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(AttributeChange)) {
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -194,7 +194,7 @@ fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(Event)) {
 ///
 /// timeout 0 = 無期限（イベントが来るまでブロック）。呼ぶ側がループして継続監視にする。
 /// フィルタは付けず全ノードを受け、突合は casad 側で行う（enl と同じ分担）。
-pub fn listen_once(bin: &str) -> Result<Vec<Event>, CasaError> {
+pub fn listen_once(bin: &str) -> Result<Vec<AttributeChange>, CasaError> {
     tracing::debug!(bin, "spawning mat listen");
 
     let output = Command::new(bin)
@@ -236,8 +236,8 @@ pub fn listen_once(bin: &str) -> Result<Vec<Event>, CasaError> {
     Ok(events)
 }
 
-/// stdout（1 行 1 JSON）を Event 列にパースする。空行は無視。
-fn parse_lines(stdout: &[u8]) -> Result<Vec<Event>, CasaError> {
+/// stdout（1 行 1 JSON）を AttributeChange 列にパースする。空行は無視。
+fn parse_lines(stdout: &[u8]) -> Result<Vec<AttributeChange>, CasaError> {
     String::from_utf8_lossy(stdout)
         .lines()
         .filter(|l| !l.trim().is_empty())

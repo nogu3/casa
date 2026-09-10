@@ -29,11 +29,11 @@ impl StateCache {
 
     /// mat listen イベント 1 件を取り込む。OnOff クラスタの on-off（bool 値）
     /// 以外は無視する。priming / recovered も取り込む（現在値の知識として有効）。
-    pub fn record(&self, ev: &mat::Event) {
+    pub fn record(&self, ev: &mat::AttributeChange) {
         self.record_at(ev, Instant::now());
     }
 
-    fn record_at(&self, ev: &mat::Event, at: Instant) {
+    fn record_at(&self, ev: &mat::AttributeChange, at: Instant) {
         if !is_onoff(&ev.cluster) || !is_on_off_attr(&ev.attribute) {
             return;
         }
@@ -77,8 +77,8 @@ fn is_on_off_attr(attr: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
 
-    fn onoff_event(node: u64, ep: u64, value: serde_json::Value) -> mat::Event {
-        mat::Event {
+    fn onoff_event(node: u64, ep: u64, value: serde_json::Value) -> mat::AttributeChange {
+        mat::AttributeChange {
             node_id: node,
             endpoint: ep,
             cluster: serde_json::json!("onoff"),
@@ -132,7 +132,7 @@ mod tests {
         c.record(&ev);
         assert!(c.is_off_fresh(24, 1, TTL));
         // 未知 ID の数値形（cluster 6 / attribute 0）も OnOff として拾う。
-        let ev = mat::Event {
+        let ev = mat::AttributeChange {
             cluster: serde_json::json!(6),
             attribute: serde_json::json!(0),
             ..onoff_event(30, 1, serde_json::json!(false))
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn non_onoff_events_are_ignored() {
         let c = StateCache::new();
-        let ev = mat::Event {
+        let ev = mat::AttributeChange {
             cluster: serde_json::json!("occupancysensing"),
             attribute: serde_json::json!("occupancy"),
             ..onoff_event(24, 1, serde_json::json!(0))

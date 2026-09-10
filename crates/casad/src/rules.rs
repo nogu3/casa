@@ -132,10 +132,10 @@ pub enum Trigger {
         epc: String,
         equals: String,
     },
-    /// Matter イベント: あるデバイスの属性が指定値になったとき（mat listen 経由）。
+    /// Matter 属性: あるデバイスの属性が指定値になったとき（mat listen の属性行経由）。
     /// 例: `when = { device = "study_motion", attribute = "occupancy", equals = 0 }`
-    /// equals は matd イベントの JSON `value` と等値比較する（数値 / bool / 文字列）。
-    MatterEvent {
+    /// equals は matd 属性行の JSON `value` と等値比較する（数値 / bool / 文字列）。
+    MatterAttribute {
         device: String,
         attribute: String,
         equals: serde_json::Value,
@@ -282,7 +282,7 @@ impl RuleFile {
                 Trigger::Event { device, .. } => {
                     check_device(config, &rule.name, device)?;
                 }
-                Trigger::MatterEvent { device, .. } => {
+                Trigger::MatterAttribute { device, .. } => {
                     check_matter_device(config, &rule.name, device)?;
                 }
                 Trigger::Time { .. } => {}
@@ -580,7 +580,7 @@ then = { action = "on", device = "ghost_device" }
     }
 
     #[test]
-    fn parses_matter_event_rule() {
+    fn parses_matter_attribute_rule() {
         let file = parse(
             r#"
 version = 1
@@ -592,7 +592,7 @@ then = { action = "off", device = "desk_tape_light" }
         )
         .unwrap();
         match &file.rules[0].when {
-            Trigger::MatterEvent {
+            Trigger::MatterAttribute {
                 device,
                 attribute,
                 equals,
@@ -622,11 +622,13 @@ then = { action = "on", device = "d" }
         )
         .unwrap();
         match &file.rules[0].when {
-            Trigger::MatterEvent { equals, .. } => assert_eq!(equals, &serde_json::json!(true)),
+            Trigger::MatterAttribute { equals, .. } => assert_eq!(equals, &serde_json::json!(true)),
             other => panic!("unexpected trigger: {other:?}"),
         }
         match &file.rules[1].when {
-            Trigger::MatterEvent { equals, .. } => assert_eq!(equals, &serde_json::json!("auto")),
+            Trigger::MatterAttribute { equals, .. } => {
+                assert_eq!(equals, &serde_json::json!("auto"))
+            }
             other => panic!("unexpected trigger: {other:?}"),
         }
     }
@@ -669,7 +671,7 @@ node_id = "not_a_number"
     }
 
     #[test]
-    fn validate_accepts_matter_event_rule() {
+    fn validate_accepts_matter_attribute_rule() {
         let file = parse(
             r#"
 version = 1
