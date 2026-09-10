@@ -304,7 +304,45 @@ pub fn matter_attribute_matches(
     if event.priming {
         return false;
     }
-    let (node_id, endpoint) = match config.device(device) {
+    source_matches(config, device, event.node_id, event.endpoint)
+        && name_matches(&event.attribute, attribute)
+        && event.value == *equals
+}
+
+/// Matter デバイスイベントトリガのルールが、mat listen のイベント行 1 件に一致するか。
+/// priming（matd 再購読時の再配達）は状変ではないので無条件で不一致。`data` は
+/// 部分一致: ルールに書いたキーだけを JSON 値として型込みで等値比較し、書いていない
+/// キーは無視する。ルールに `data` があるのに行に `data` が無ければ不一致。
+pub fn matter_event_matches(rule: &Rule, config: &Config, event: &mat::MatterEvent) -> bool {
+    let Trigger::MatterEvent {
+        device,
+        event: name,
+        data,
+    } = &rule.when
+    else {
+        return false;
+    };
+    if event.priming {
+        return false;
+    }
+    if !source_matches(config, device, event.node_id, event.endpoint)
+        || !name_matches(&event.event, name)
+    {
+        return false;
+    }
+    match data {
+        None => true,
+        Some(want) => match &event.data {
+            None => false,
+            Some(have) => want.iter().all(|(k, v)| have.get(k) == Some(v)),
+        },
+    }
+}
+
+/// ルールの発火元デバイス（matter・node_id 必須）と受信行の (node_id, endpoint) の突合。
+/// devices.toml に `endpoint` があればそれも一致を要求する。
+fn source_matches(config: &Config, device: &str, node_id: u64, endpoint: u64) -> bool {
+    let (rule_node, rule_ep) = match config.device(device) {
         Ok(Device::Matter {
             node_id: Some(node_id),
             endpoint,
@@ -312,23 +350,21 @@ pub fn matter_attribute_matches(
         }) => (node_id, endpoint),
         _ => return false,
     };
-    if parse_node_id(node_id) != Some(event.node_id) {
+    if parse_node_id(rule_node) != Some(node_id) {
         return false;
     }
-    if let Some(ep) = endpoint {
-        if u64::from(*ep) != event.endpoint {
-            return false;
-        }
+    match rule_ep {
+        Some(ep) => u64::from(*ep) == endpoint,
+        None => true,
     }
-    attribute_matches(&event.attribute, attribute) && event.value == *equals
 }
 
-/// イベントの attribute（chip-tool 名 or 未知 ID の数値）とルールの属性名の突合。
-/// 名前は case-insensitive、数値はルール側の 10 進表記と比較する。
-fn attribute_matches(event_attr: &serde_json::Value, rule_attr: &str) -> bool {
-    match event_attr {
-        serde_json::Value::String(s) => s.eq_ignore_ascii_case(rule_attr),
-        serde_json::Value::Number(n) => rule_attr.trim().parse::<u64>().ok() == n.as_u64(),
+/// 受信行の名前（属性名 / イベント名。chip-tool 名 or 未知 ID の数値）とルール側の
+/// 名前の突合。名前は case-insensitive、数値はルール側の 10 進表記と比較する。
+fn name_matches(actual: &serde_json::Value, rule_name: &str) -> bool {
+    match actual {
+        serde_json::Value::String(s) => s.eq_ignore_ascii_case(rule_name),
+        serde_json::Value::Number(n) => rule_name.trim().parse::<u64>().ok() == n.as_u64(),
         _ => false,
     }
 }
@@ -346,7 +382,7 @@ fn due_matter_rules<'a>(
         .filter(|r| {
             lines.iter().any(|l| match l {
                 mat::Incoming::Attribute(ev) => matter_attribute_matches(r, config, ev),
-                mat::Incoming::Event(_) => false,
+                mat::Incoming::Event(ev) => matter_event_matches(r, config, ev),
             })
         })
         .filter(|r| active_or_log(r, now))
@@ -752,6 +788,13 @@ node_id = "6"
 protocol = "matter"
 node_id = "5678"
 endpoint = 2
+[devices.wall_switch]
+protocol = "matter"
+node_id = "25"
+endpoint = 2
+[devices.door_sensor]
+protocol = "matter"
+node_id = "19"
 "#,
         )
         .unwrap()
@@ -987,6 +1030,235 @@ then = { action = "off", device = "desk_tape_light" }
         let due = due_matter_rules(&file, &cfg, &[mat::Incoming::Attribute(ev)], at(12, 0));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].name, "人感OFFで消灯");
+    }
+
+    fn mat_device_event(
+        node_id: u64,
+        endpoint: u64,
+        cluster: &str,
+        event: &str,
+        data: Option<serde_json::Value>,
+    ) -> mat::MatterEvent {
+        mat::MatterEvent {
+            node_id,
+            endpoint,
+            cluster: serde_json::json!(cluster),
+            event: serde_json::json!(event),
+            event_number: Some(1),
+            data: data.map(|d| d.as_object().expect("data はオブジェクト").clone()),
+            priming: false,
+        }
+    }
+
+    const SWITCH_RULE: &str = r#"
+version = 1
+[[rules]]
+name = "2回押しで消灯"
+when = { device = "wall_switch", event = "multi-press-complete", data = { "total-number-of-presses-counted" = 2 } }
+then = { action = "off", device = "desk_tape_light" }
+"#;
+
+    const START_UP_RULE: &str = r#"
+version = 1
+[[rules]]
+name = "起動検知"
+when = { device = "door_sensor", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#;
+
+    #[test]
+    fn matter_event_matches_on_name_alone_when_rule_has_no_data() {
+        let file = rules(START_UP_RULE);
+        let cfg = config_matter();
+        // data 無しのイベント。
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(19, 0, "basicinformation", "start-up", None)
+        ));
+        // data 付きのイベントでも名前だけで一致する。
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(
+                19,
+                0,
+                "basicinformation",
+                "start-up",
+                Some(serde_json::json!({"software-version": 3}))
+            )
+        ));
+        // 名前違い。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(19, 0, "basicinformation", "shut-down", None)
+        ));
+    }
+
+    #[test]
+    fn matter_event_data_is_partial_match_with_strict_types() {
+        let file = rules(SWITCH_RULE);
+        let cfg = config_matter();
+        // 書いたキーだけ比較、他キー（previous-position）は無視。
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(
+                25,
+                2,
+                "switch",
+                "multi-press-complete",
+                Some(
+                    serde_json::json!({"previous-position": 1, "total-number-of-presses-counted": 2})
+                )
+            )
+        ));
+        // 値違い（1 回押し）。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(
+                25,
+                2,
+                "switch",
+                "multi-press-complete",
+                Some(serde_json::json!({"total-number-of-presses-counted": 1}))
+            )
+        ));
+        // 型違い（整数 2 vs 浮動小数 2.0）。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(
+                25,
+                2,
+                "switch",
+                "multi-press-complete",
+                Some(serde_json::json!({"total-number-of-presses-counted": 2.0}))
+            )
+        ));
+        // ルールに data があるのにイベントに data が無い → 不一致。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(25, 2, "switch", "multi-press-complete", None)
+        ));
+        // ルールのキーがイベントに無い → 不一致。
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(
+                25,
+                2,
+                "switch",
+                "multi-press-complete",
+                Some(serde_json::json!({"previous-position": 1}))
+            )
+        ));
+    }
+
+    #[test]
+    fn matter_event_priming_never_matches() {
+        let file = rules(START_UP_RULE);
+        let cfg = config_matter();
+        let mut ev = mat_device_event(19, 0, "basicinformation", "start-up", None);
+        ev.priming = true;
+        // matd 再購読時の再配達（起動系イベントは特にまとめて来る）で発火してはならない。
+        assert!(!matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn matter_event_name_is_case_insensitive_and_accepts_numeric_id() {
+        let cfg = config_matter();
+        let file = rules(START_UP_RULE);
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(19, 0, "basicinformation", "Start-Up", None)
+        ));
+        // matd が ids テーブルに無いイベントを数値で流した場合、ルール側は 10 進表記で書く。
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "数値イベント"
+when = { device = "door_sensor", event = "0" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        );
+        let mut ev = mat_device_event(19, 0, "basicinformation", "start-up", None);
+        ev.event = serde_json::json!(0);
+        assert!(matter_event_matches(&file.rules[0], &cfg, &ev));
+    }
+
+    #[test]
+    fn matter_event_source_must_match_node_and_configured_endpoint() {
+        let cfg = config_matter();
+        let file = rules(SWITCH_RULE);
+        let press = |node, ep| {
+            mat_device_event(
+                node,
+                ep,
+                "switch",
+                "multi-press-complete",
+                Some(serde_json::json!({"total-number-of-presses-counted": 2})),
+            )
+        };
+        assert!(matter_event_matches(&file.rules[0], &cfg, &press(25, 2)));
+        // node 違い。
+        assert!(!matter_event_matches(&file.rules[0], &cfg, &press(19, 2)));
+        // wall_switch は endpoint = 2 指定なので endpoint 違いは不一致。
+        assert!(!matter_event_matches(&file.rules[0], &cfg, &press(25, 1)));
+        // door_sensor は endpoint 未指定なのでどの endpoint でも一致。
+        let file = rules(START_UP_RULE);
+        assert!(matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(19, 3, "basicinformation", "start-up", None)
+        ));
+        // 属性ルールにイベント行は一致しない（variant 違い）。
+        let file = rules(MATTER_RULE);
+        assert!(!matter_event_matches(
+            &file.rules[0],
+            &cfg,
+            &mat_device_event(16, 1, "occupancysensing", "start-up", None)
+        ));
+    }
+
+    #[test]
+    fn due_matter_rules_fires_attribute_and_event_rules_from_mixed_batch() {
+        let cfg = config_matter();
+        let file = rules(
+            r#"
+version = 1
+[[rules]]
+name = "時刻"
+when = { at = "22:00" }
+then = { action = "off", device = "desk_tape_light" }
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+[[rules]]
+name = "起動検知"
+when = { device = "door_sensor", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        );
+        let batch = vec![
+            mat::Incoming::Attribute(mat_event(16, 1, "occupancy", serde_json::json!(0))),
+            mat::Incoming::Event(mat_device_event(
+                19,
+                0,
+                "basicinformation",
+                "start-up",
+                None,
+            )),
+        ];
+        let due = due_matter_rules(&file, &cfg, &batch, at(12, 0));
+        let names: Vec<&str> = due.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["人感OFFで消灯", "起動検知"]);
     }
 
     const MULTI: &str = r#"
