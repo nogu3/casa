@@ -332,20 +332,21 @@ fn attribute_matches(event_attr: &serde_json::Value, rule_attr: &str) -> bool {
     }
 }
 
-/// 1 バッチの mat listen 行に一致する Matter 由来トリガのルールを返す（rules.toml 記載順・重複なし）。
+/// 1 バッチの mat listen 行（属性行・イベント行混在）に一致する Matter 由来トリガの
+/// ルールを返す（rules.toml 記載順・重複なし）。
 fn due_matter_rules<'a>(
     file: &'a RuleFile,
     config: &Config,
-    events: &[mat::AttributeChange],
+    lines: &[mat::Incoming],
     now: NaiveTime,
 ) -> Vec<&'a Rule> {
     file.rules
         .iter()
-        .filter(|r| matches!(r.when, Trigger::MatterAttribute { .. }))
         .filter(|r| {
-            events
-                .iter()
-                .any(|e| matter_attribute_matches(r, config, e))
+            lines.iter().any(|l| match l {
+                mat::Incoming::Attribute(ev) => matter_attribute_matches(r, config, ev),
+                mat::Incoming::Event(_) => false,
+            })
         })
         .filter(|r| active_or_log(r, now))
         .collect()
@@ -360,11 +361,11 @@ pub fn drain_matter_events_once(
     now: Option<NaiveTime>,
     config_path: Option<&Path>,
 ) -> Result<usize, CasaError> {
-    let events = mat::listen_once(mat_bin)?;
+    let lines = mat::listen_once(mat_bin)?;
     // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
     // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
     Ok(fire_all(
-        due_matter_rules(file, config, &events, now_or(now)),
+        due_matter_rules(file, config, &lines, now_or(now)),
         config_path,
     ))
 }
@@ -539,13 +540,20 @@ fn matter_event_loop<'env>(
     cache: &StateCache,
 ) -> ! {
     loop {
-        let result = mat::listen_stream(mat_bin, |event| {
-            // off no-op スキップ用の最終値キャッシュを先に更新する（priming 含む —
-            // 現在値の再配達はキャッシュには有効な知識）。
-            cache.record(&event);
+        let result = mat::listen_stream(mat_bin, |incoming| {
+            if let mat::Incoming::Attribute(ev) = &incoming {
+                // off no-op スキップ用の最終値キャッシュを先に更新する（priming 含む —
+                // 現在値の再配達はキャッシュには有効な知識）。
+                cache.record(ev);
+            }
             // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
             let now = Local::now().time();
-            let queued = dispatcher.dispatch_all(due_matter_rules(file, config, &[event], now));
+            let queued = dispatcher.dispatch_all(due_matter_rules(
+                file,
+                config,
+                std::slice::from_ref(&incoming),
+                now,
+            ));
             if queued > 0 {
                 tracing::debug!(queued, "matter event rule actions queued");
             }
@@ -973,7 +981,7 @@ then = { action = "off", device = "desk_tape_light" }
 "#,
         );
         let ev = mat_event(16, 1, "occupancy", serde_json::json!(0));
-        let due = due_matter_rules(&file, &cfg, &[ev], at(12, 0));
+        let due = due_matter_rules(&file, &cfg, &[mat::Incoming::Attribute(ev)], at(12, 0));
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].name, "人感OFFで消灯");
     }
@@ -1220,14 +1228,24 @@ then = { action = "on", device = "desk_tape_light" }
         let inside = due_matter_rules(
             &file,
             &cfg,
-            &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
+            &[mat::Incoming::Attribute(mat_event(
+                16,
+                1,
+                "occupancy",
+                serde_json::json!(0),
+            ))],
             at(12, 0),
         );
         assert_eq!(inside.len(), 1);
         let outside = due_matter_rules(
             &file,
             &cfg,
-            &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
+            &[mat::Incoming::Attribute(mat_event(
+                16,
+                1,
+                "occupancy",
+                serde_json::json!(0),
+            ))],
             at(21, 30),
         );
         assert!(outside.is_empty());
@@ -1256,7 +1274,12 @@ then = { action = "on", device = "desk_tape_light" }
             due_matter_rules(
                 &matter_file,
                 &matter_cfg,
-                &[mat_event(16, 1, "occupancy", serde_json::json!(0))],
+                &[mat::Incoming::Attribute(mat_event(
+                    16,
+                    1,
+                    "occupancy",
+                    serde_json::json!(0)
+                ))],
                 at(3, 0)
             )
             .len(),

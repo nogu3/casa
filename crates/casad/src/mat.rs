@@ -39,64 +39,82 @@ pub struct AttributeChange {
     pub recovered: bool,
 }
 
-/// `mat listen` の Matter イベント行（mat 1.36.0+、`event` キーあり・`attribute` 無し）。
-/// casad はまだイベントをトリガに使わない（ルール構文が無い）ので発火せず、debug ログ
-/// だけ残す。wildcard 購読では起動系イベント（start-up / boot-reason /
-/// access-control-entry-changed）の priming が数十行まとめて来るため、warn で流すと
-/// ノイズになる。
+/// `mat listen` の Matter デバイスイベント行（mat 1.36.0+、`event` キーあり・`attribute` 無し）。
+/// wildcard 購読では起動系イベント（start-up / boot-reason / access-control-entry-changed）
+/// の priming が数十行まとめて来る。発火判定（priming 除外・突合）は engine、重複配達の
+/// デデュープは event_dedupe が担う。
 #[derive(Debug, Deserialize)]
 pub struct MatterEvent {
     pub node_id: u64,
     pub endpoint: u64,
+    /// chip-tool 名（例 "switch"）または未知 ID の数値。
     pub cluster: serde_json::Value,
+    /// イベント名（例 "initial-press"）または未知 ID の数値。
     pub event: serde_json::Value,
+    /// Matter の EventNumber。デデュープに使う。欠落は None（デデュープ対象外）。
+    #[serde(default)]
+    pub event_number: Option<u64>,
+    /// イベントフィールド（kebab 名キー）。イベントがデータを持たなければキー自体が無い。
+    #[serde(default)]
+    pub data: Option<serde_json::Map<String, serde_json::Value>>,
+    /// matd（再）購読時の再配達。状変ではないので発火してはならない。
     #[serde(default)]
     pub priming: bool,
 }
 
-/// `mat listen` の 1 行の分類。
+/// `mat listen` の 1 行（属性行 / イベント行）。engine はこれを受けて突合する。
 #[derive(Debug)]
-enum Line {
-    /// 属性行（発火対象）。
+pub enum Incoming {
     Attribute(AttributeChange),
-    /// Matter イベント行（発火しない、debug のみ）。
-    MatterEvent(MatterEvent),
-    /// どちらでもない行（matd の lag エラー行 `{"error":...}` 等）。
-    Other(serde_json::Error),
+    Event(MatterEvent),
 }
 
-/// 属性行と Matter イベント行を `attribute` / `event` キーの有無で分ける。両方無い・
-/// 必須フィールド欠落は `Other`。
-fn classify_line(line: &str) -> Line {
+/// 属性行とイベント行を `attribute` / `event` キーの有無で分ける。両方無い・
+/// 必須フィールド欠落は Err（matd の lag エラー行 `{"error":...}` 等）。
+fn classify_line(line: &str) -> Result<Incoming, serde_json::Error> {
     let has_key = |key: &str| {
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(line)
             .map(|m| m.contains_key(key))
             .unwrap_or(false)
     };
-    if has_key("attribute") {
-        return match serde_json::from_str::<AttributeChange>(line) {
-            Ok(ev) => Line::Attribute(ev),
-            Err(e) => Line::Other(e),
-        };
+    if has_key("event") && !has_key("attribute") {
+        return serde_json::from_str::<MatterEvent>(line).map(Incoming::Event);
     }
-    if has_key("event") {
-        return match serde_json::from_str::<MatterEvent>(line) {
-            Ok(ev) => Line::MatterEvent(ev),
-            Err(e) => Line::Other(e),
-        };
-    }
-    match serde_json::from_str::<AttributeChange>(line) {
-        Ok(ev) => Line::Attribute(ev),
-        Err(e) => Line::Other(e),
+    serde_json::from_str::<AttributeChange>(line).map(Incoming::Attribute)
+}
+
+/// 受信した 1 行を debug で残す（ルールに一致しない行も追えるよう全件）。
+fn log_received(line: &Incoming) {
+    match line {
+        Incoming::Attribute(ev) => tracing::debug!(
+            node_id = ev.node_id,
+            endpoint = ev.endpoint,
+            cluster = %ev.cluster,
+            attribute = %ev.attribute,
+            value = %ev.value,
+            priming = ev.priming,
+            recovered = ev.recovered,
+            "event received"
+        ),
+        Incoming::Event(ev) => tracing::debug!(
+            node_id = ev.node_id,
+            endpoint = ev.endpoint,
+            cluster = %ev.cluster,
+            event = %ev.event,
+            event_number = ?ev.event_number,
+            data = ?ev.data,
+            priming = ev.priming,
+            "matter event received"
+        ),
     }
 }
 
 /// 常駐 `mat listen --count 0 --timeout-ms 0` を spawn し、stdout の NDJSON を
-/// 1 行ずつ読んでイベントごとに `on_event` を呼ぶ。child が終了するまで戻らない。
+/// 1 行ずつ読んで行ごとに `on_line` を呼ぶ。child が終了するまで戻らない。
 ///
 /// フィルタは付けず全ノードを受け、突合は casad 側で行う（enl と同じ分担）。
 /// 戻りは常に異常系（matd 不在 exit 13 等）なので、呼ぶ側が backoff して再起動する。
-pub fn listen_stream(bin: &str, on_event: impl FnMut(AttributeChange)) -> Result<(), CasaError> {
+pub fn listen_stream(bin: &str, on_line: impl FnMut(Incoming)) -> Result<(), CasaError> {
     tracing::debug!(bin, "spawning mat listen stream");
 
     let mut child = Command::new(bin)
@@ -123,7 +141,7 @@ pub fn listen_stream(bin: &str, on_event: impl FnMut(AttributeChange)) -> Result
     });
 
     let stdout = child.stdout.take().expect("stdout is piped");
-    read_events(BufReader::new(stdout), on_event);
+    read_events(BufReader::new(stdout), on_line);
 
     let status = child.wait().map_err(|e| {
         CasaError::new(
@@ -142,11 +160,10 @@ pub fn listen_stream(bin: &str, on_event: impl FnMut(AttributeChange)) -> Result
     Ok(())
 }
 
-/// NDJSON ストリームを 1 行ずつ読み、属性行を `on_event` へ渡す。
-/// 空行は無視。Matter イベント行（`event` キー、mat 1.36.0+）は発火せず debug のみ。
-/// パース不能行（matd の lag エラー行 `{"error":...}` 等）は warn を残して skip し、
-/// ストリームは続行する。EOF / 読み取りエラーで戻る。
-fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(AttributeChange)) {
+/// NDJSON ストリームを 1 行ずつ読み、属性行 / イベント行を `on_line` へ渡す。
+/// 空行は無視。パース不能行（matd の lag エラー行 `{"error":...}` 等）は warn を
+/// 残して skip し、ストリームは続行する。EOF / 読み取りエラーで戻る。
+fn read_events<R: BufRead>(reader: R, mut on_line: impl FnMut(Incoming)) {
     for line in reader.lines() {
         let line = match line {
             Ok(l) => l,
@@ -159,31 +176,11 @@ fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(AttributeChange))
             continue;
         }
         match classify_line(&line) {
-            Line::Attribute(ev) => {
-                // ルールに一致しないイベントも追えるよう、受信した全イベントを debug で残す。
-                tracing::debug!(
-                    node_id = ev.node_id,
-                    endpoint = ev.endpoint,
-                    cluster = %ev.cluster,
-                    attribute = %ev.attribute,
-                    value = %ev.value,
-                    priming = ev.priming,
-                    recovered = ev.recovered,
-                    "event received"
-                );
-                on_event(ev);
+            Ok(incoming) => {
+                log_received(&incoming);
+                on_line(incoming);
             }
-            Line::MatterEvent(ev) => {
-                tracing::debug!(
-                    node_id = ev.node_id,
-                    endpoint = ev.endpoint,
-                    cluster = %ev.cluster,
-                    event = %ev.event,
-                    priming = ev.priming,
-                    "matter event line received; not a trigger yet, ignored"
-                );
-            }
-            Line::Other(e) => {
+            Err(e) => {
                 tracing::warn!(error = %e, line, "mat listen stdout line is not an event; skipping");
             }
         }
@@ -194,7 +191,7 @@ fn read_events<R: BufRead>(reader: R, mut on_event: impl FnMut(AttributeChange))
 ///
 /// timeout 0 = 無期限（イベントが来るまでブロック）。呼ぶ側がループして継続監視にする。
 /// フィルタは付けず全ノードを受け、突合は casad 側で行う（enl と同じ分担）。
-pub fn listen_once(bin: &str) -> Result<Vec<AttributeChange>, CasaError> {
+pub fn listen_once(bin: &str) -> Result<Vec<Incoming>, CasaError> {
     tracing::debug!(bin, "spawning mat listen");
 
     let output = Command::new(bin)
@@ -220,29 +217,21 @@ pub fn listen_once(bin: &str) -> Result<Vec<AttributeChange>, CasaError> {
         ));
     }
 
-    let events = parse_lines(&output.stdout)?;
+    let lines = parse_lines(&output.stdout)?;
     // ルールに一致しないイベントも追えるよう、受信した全イベントを debug で残す。
-    for ev in &events {
-        tracing::debug!(
-            node_id = ev.node_id,
-            endpoint = ev.endpoint,
-            cluster = %ev.cluster,
-            attribute = %ev.attribute,
-            value = %ev.value,
-            priming = ev.priming,
-            "event received"
-        );
+    for line in &lines {
+        log_received(line);
     }
-    Ok(events)
+    Ok(lines)
 }
 
-/// stdout（1 行 1 JSON）を AttributeChange 列にパースする。空行は無視。
-fn parse_lines(stdout: &[u8]) -> Result<Vec<AttributeChange>, CasaError> {
+/// stdout（1 行 1 JSON）を Incoming 列にパースする。空行は無視。
+fn parse_lines(stdout: &[u8]) -> Result<Vec<Incoming>, CasaError> {
     String::from_utf8_lossy(stdout)
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|line| {
-            serde_json::from_str(line).map_err(|e| {
+            classify_line(line).map_err(|e| {
                 CasaError::new(
                     ErrorKind::ChildInvalidOutput,
                     format!("mat listen stdout line is not valid JSON: {e}"),
@@ -256,22 +245,37 @@ fn parse_lines(stdout: &[u8]) -> Result<Vec<AttributeChange>, CasaError> {
 mod tests {
     use super::*;
 
+    /// テスト用: Incoming から属性行だけ取り出す。
+    fn attr(line: Incoming) -> Option<AttributeChange> {
+        match line {
+            Incoming::Attribute(ev) => Some(ev),
+            Incoming::Event(_) => None,
+        }
+    }
+
     #[test]
     fn parses_single_event_line() {
         let line = br#"{"timestamp":"2026-07-23T00:00:00+09:00","node_id":16,"endpoint":1,"cluster":"occupancysensing","attribute":"occupancy","value":1,"priming":false}"#;
-        let events = parse_lines(line).unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].node_id, 16);
-        assert_eq!(events[0].endpoint, 1);
-        assert_eq!(events[0].attribute, serde_json::json!("occupancy"));
-        assert_eq!(events[0].value, serde_json::json!(1));
-        assert!(!events[0].priming);
+        let lines = parse_lines(line).unwrap();
+        assert_eq!(lines.len(), 1);
+        let Incoming::Attribute(ev) = &lines[0] else {
+            panic!("expected attribute line: {:?}", lines[0])
+        };
+        assert_eq!(ev.node_id, 16);
+        assert_eq!(ev.endpoint, 1);
+        assert_eq!(ev.attribute, serde_json::json!("occupancy"));
+        assert_eq!(ev.value, serde_json::json!(1));
+        assert!(!ev.priming);
     }
 
     #[test]
     fn parses_multiple_lines_and_skips_blank() {
         let lines = b"{\"node_id\":16,\"endpoint\":1,\"cluster\":1030,\"attribute\":0,\"value\":0,\"priming\":true}\n\n{\"node_id\":6,\"endpoint\":1,\"cluster\":\"onoff\",\"attribute\":\"onoff\",\"value\":true}\n";
-        let events = parse_lines(lines).unwrap();
+        let events: Vec<AttributeChange> = parse_lines(lines)
+            .unwrap()
+            .into_iter()
+            .filter_map(attr)
+            .collect();
         assert_eq!(events.len(), 2);
         assert!(events[0].priming);
         // priming 欠落は false 既定。
@@ -291,7 +295,7 @@ mod tests {
     fn read_events_delivers_each_line_in_order() {
         let lines = b"{\"node_id\":16,\"endpoint\":1,\"cluster\":\"occupancysensing\",\"attribute\":\"occupancy\",\"value\":0,\"priming\":false}\n\n{\"node_id\":16,\"endpoint\":1,\"cluster\":\"occupancysensing\",\"attribute\":\"occupancy\",\"value\":1,\"priming\":false}\n";
         let mut seen = Vec::new();
-        read_events(&lines[..], |ev| seen.push(ev.value.clone()));
+        read_events(&lines[..], |l| seen.extend(attr(l).map(|ev| ev.value)));
         assert_eq!(seen, vec![serde_json::json!(0), serde_json::json!(1)]);
     }
 
@@ -301,7 +305,7 @@ mod tests {
     fn read_events_skips_invalid_line_and_continues() {
         let lines = b"{\"node_id\":6,\"endpoint\":1,\"cluster\":\"onoff\",\"attribute\":\"onoff\",\"value\":true}\n{\"error\":{\"kind\":\"lagged\",\"detail\":\"...\"}}\n{\"node_id\":7,\"endpoint\":1,\"cluster\":\"onoff\",\"attribute\":\"onoff\",\"value\":false}\n";
         let mut seen = Vec::new();
-        read_events(&lines[..], |ev| seen.push(ev.node_id));
+        read_events(&lines[..], |l| seen.extend(attr(l).map(|ev| ev.node_id)));
         assert_eq!(seen, vec![6, 7]);
     }
 
@@ -311,36 +315,82 @@ mod tests {
     fn read_events_parses_recovered_field() {
         let lines = b"{\"node_id\":16,\"endpoint\":1,\"cluster\":\"occupancysensing\",\"attribute\":\"occupancy\",\"value\":1,\"priming\":false,\"recovered\":true}\n{\"node_id\":16,\"endpoint\":1,\"cluster\":\"occupancysensing\",\"attribute\":\"occupancy\",\"value\":0,\"priming\":false}\n";
         let mut seen = Vec::new();
-        read_events(&lines[..], |ev| seen.push(ev.recovered));
+        read_events(&lines[..], |l| seen.extend(attr(l).map(|ev| ev.recovered)));
         assert_eq!(seen, vec![true, false]);
     }
 
-    /// event 行（mat 1.36.0+、`event` キーあり・`attribute` 無し）は属性イベントではない
-    /// ので発火しないが、不正行でもないので warn を出さず debug で流す（wildcard 購読
-    /// では起動系イベントの priming が数十行まとめて来る）。
+    /// 属性行とイベント行（mat 1.36.0+、`event` キーあり）を到着順のまま `Incoming` に
+    /// 分類して渡す。イベント行は `event_number` / `data` / `priming` を拾う。
     #[test]
-    fn read_events_ignores_matter_event_lines_silently() {
-        let lines = b"{\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"attribute\":\"state-value\",\"value\":false,\"priming\":false}\n{\"timestamp\":\"2026-09-07T00:37:33+09:00\",\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"event\":\"state-change\",\"event_number\":590151,\"priority\":\"info\",\"data\":{\"state-value\":false},\"priming\":true}\n{\"node_id\":19,\"endpoint\":0,\"cluster\":\"basicinformation\",\"event\":\"start-up\",\"event_number\":1,\"priority\":\"critical\",\"priming\":true}\n{\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"attribute\":\"state-value\",\"value\":true,\"priming\":false}\n";
+    fn read_events_classifies_attribute_and_event_lines_in_order() {
+        let lines = b"{\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"attribute\":\"state-value\",\"value\":false,\"priming\":false}\n{\"timestamp\":\"2026-09-07T00:37:33+09:00\",\"node_id\":19,\"endpoint\":1,\"cluster\":\"booleanstate\",\"event\":\"state-change\",\"event_number\":590151,\"priority\":\"info\",\"data\":{\"state-value\":false},\"device_time\":{\"system_ms\":577001426},\"priming\":true}\n{\"node_id\":25,\"endpoint\":2,\"cluster\":\"switch\",\"event\":\"multi-press-complete\",\"event_number\":1725600000130,\"priority\":\"info\",\"data\":{\"previous-position\":1,\"total-number-of-presses-counted\":2},\"priming\":false}\n";
         let mut seen = Vec::new();
-        read_events(&lines[..], |ev| seen.push(ev.value.clone()));
+        read_events(&lines[..], |l| seen.push(l));
+        assert_eq!(seen.len(), 3);
+        assert!(matches!(&seen[0], Incoming::Attribute(ev) if ev.node_id == 19));
+        let Incoming::Event(door) = &seen[1] else {
+            panic!("expected event line: {:?}", seen[1])
+        };
+        assert_eq!(door.node_id, 19);
+        assert_eq!(door.endpoint, 1);
+        assert_eq!(door.cluster, serde_json::json!("booleanstate"));
+        assert_eq!(door.event, serde_json::json!("state-change"));
+        assert_eq!(door.event_number, Some(590151));
         assert_eq!(
-            seen,
-            vec![serde_json::json!(false), serde_json::json!(true)]
+            door.data.as_ref().unwrap().get("state-value"),
+            Some(&serde_json::json!(false))
         );
-        // 分類そのものも固定する: event 行は MatterEvent、属性行は Attribute、その他は Other。
-        assert!(matches!(
-            classify_line(
-                r#"{"node_id":19,"endpoint":1,"cluster":"switch","event":"initial-press","event_number":3,"priority":"info","data":{"new-position":1},"priming":false}"#
-            ),
-            Line::MatterEvent(MatterEvent {
-                node_id: 19,
-                endpoint: 1,
-                ..
-            })
-        ));
-        assert!(matches!(
-            classify_line(r#"{"error":{"kind":"lagged","detail":"..."}}"#),
-            Line::Other(_)
-        ));
+        assert!(door.priming);
+        let Incoming::Event(press) = &seen[2] else {
+            panic!("expected event line: {:?}", seen[2])
+        };
+        assert_eq!(press.event_number, Some(1725600000130));
+        assert_eq!(
+            press
+                .data
+                .as_ref()
+                .unwrap()
+                .get("total-number-of-presses-counted"),
+            Some(&serde_json::json!(2))
+        );
+        assert!(!press.priming);
+    }
+
+    /// data キー無し（イベントがフィールドを持たない）と event_number 欠落は None。
+    /// 未知 ID の数値 cluster / event もそのまま拾う。
+    #[test]
+    fn event_line_without_data_or_number_parses_to_none() {
+        let start_up = classify_line(
+            r#"{"node_id":19,"endpoint":0,"cluster":"basicinformation","event":"start-up","event_number":1,"priority":"critical","priming":true}"#,
+        )
+        .unwrap();
+        let Incoming::Event(ev) = start_up else {
+            panic!("expected event line")
+        };
+        assert!(ev.data.is_none());
+        assert_eq!(ev.event_number, Some(1));
+
+        let numeric =
+            classify_line(r#"{"node_id":19,"endpoint":1,"cluster":59,"event":1}"#).unwrap();
+        let Incoming::Event(ev) = numeric else {
+            panic!("expected event line")
+        };
+        assert_eq!(ev.cluster, serde_json::json!(59));
+        assert_eq!(ev.event, serde_json::json!(1));
+        assert!(ev.event_number.is_none());
+        assert!(!ev.priming);
+
+        // どちらのキーも無い・必須欠落は Err。
+        assert!(classify_line(r#"{"error":{"kind":"lagged","detail":"..."}}"#).is_err());
+        assert!(classify_line(r#"{"node_id":19,"event":"start-up"}"#).is_err());
+    }
+
+    /// listen_once 用の parse_lines も混在バッチをそのまま返す。
+    #[test]
+    fn parse_lines_keeps_mixed_batch() {
+        let lines = b"{\"node_id\":6,\"endpoint\":1,\"cluster\":\"onoff\",\"attribute\":\"on-off\",\"value\":true}\n{\"node_id\":25,\"endpoint\":2,\"cluster\":\"switch\",\"event\":\"initial-press\",\"event_number\":3,\"data\":{\"new-position\":1}}\n";
+        let lines = parse_lines(lines).unwrap();
+        assert!(matches!(lines[0], Incoming::Attribute(_)));
+        assert!(matches!(lines[1], Incoming::Event(_)));
     }
 }
