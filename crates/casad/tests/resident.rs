@@ -211,3 +211,88 @@ fn resident_matter_stream_consumes_burst_without_respawn() {
         "mat listen must run unbounded: {spawns}"
     );
 }
+
+const MATTER_EVENT_CONFIG: &str = r#"
+version = 1
+
+[devices.door]
+protocol = "matter"
+node_id = "9119"
+
+[devices.lamp]
+protocol = "matter"
+node_id = "6234"
+"#;
+
+// off-grace / min-gap を 0 にして FIFO 挙動で検証する（他のテストと同じ理由）。
+const MATTER_EVENT_DUP_RULES: &str = r#"
+version = 1
+[settings]
+off_grace_secs = 0
+min_gap_secs = 0
+[[rules]]
+name = "ドアイベントで点灯"
+when = { device = "door", event = "state-change", data = { "state-value" = true } }
+then = { action = "on", device = "lamp" }
+"#;
+
+/// F3: 常駐 Matter リスナは event_number が単調でない（同一番号の再配達）
+/// デバイスイベント行を event_dedupe で落とす。mat 代役は同じ event_number
+/// （100）のイベント行を 2 回出してからブロックし続けるので、一致ルールの
+/// casa 発火はちょうど 1 回になるはず。
+#[test]
+fn resident_matter_event_duplicate_delivery_fires_casa_only_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_EVENT_CONFIG);
+    let rules_path = dir.path().join("rules.toml");
+    std::fs::write(&rules_path, MATTER_EVENT_DUP_RULES).unwrap();
+
+    let _child = KillOnDrop(
+        std::process::Command::new(env!("CARGO_BIN_EXE_casad"))
+            .args([
+                "run",
+                rules_path.to_str().unwrap(),
+                "--config",
+                config.to_str().unwrap(),
+            ])
+            .env_remove("CASA_CONFIG")
+            .env("CASA_MAT_BIN", fixture("mat_listen_event_dup_stream.sh"))
+            .env("CASA_BIN", fixture("casa_record.sh"))
+            .env("CASAD_TEST_DIR", dir.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+
+    let casa_log = dir.path().join("casa.log");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let fired = loop {
+        let log = std::fs::read_to_string(&casa_log).unwrap_or_default();
+        if log.contains("on lamp") {
+            break true;
+        }
+        if Instant::now() > deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        fired,
+        "matter device event rule was not fired within 15s: {:?}",
+        std::fs::read_to_string(&casa_log)
+    );
+
+    // 重複配達の 2 行目は event_dedupe で落ちるはずなので、casa 発火はちょうど 1 回。
+    // もし落ちずに 2 回目も発火するなら、同一デバイス FIFO の 2 番目のジョブとして
+    // 1 回目の casa 呼び出し（2 秒 sleep）の後に実行される。casa 代役はさらに 2 秒
+    // sleep するので、1 回目の発火から 4 秒待てば「あるはずの 2 回目」も casa.log に
+    // 書かれているはず。余裕を見て 6 秒待ってから確定させる。
+    std::thread::sleep(Duration::from_secs(6));
+    let log = std::fs::read_to_string(&casa_log).unwrap();
+    assert_eq!(
+        log.matches("on lamp").count(),
+        1,
+        "duplicate event_number delivery must fire casa only once: {log}"
+    );
+}

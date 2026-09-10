@@ -381,3 +381,71 @@ fn listen_once_mat_does_not_fire_outside_active_window() {
         "stderr: {stderr}"
     );
 }
+
+const MATTER_EVENT_CONFIG: &str = r#"
+version = 1
+
+[devices.motion]
+protocol = "matter"
+node_id = "1234"
+
+[devices.door]
+protocol = "matter"
+node_id = "9119"
+
+[devices.lamp]
+protocol = "matter"
+node_id = "6234"
+
+[devices.fan]
+protocol = "matter"
+node_id = "6235"
+"#;
+
+const MATTER_ATTRIBUTE_AND_EVENT_RULES: &str = r#"
+version = 1
+[[rules]]
+name = "人感OFFで消灯"
+when = { device = "motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "fan" }
+[[rules]]
+name = "ドアイベントで点灯"
+when = { device = "door", event = "state-change", data = { "state-value" = true } }
+then = { action = "on", device = "lamp" }
+"#;
+
+/// F3: `--listen-once-mat` は 1 バッチ内の属性行・デバイスイベント行の両方を評価する。
+/// mat 代役は属性行 1 件（motion occupancy=0）とイベント行 1 件（door state-change,
+/// state-value=true）を同じバッチで出す。
+#[test]
+fn listen_once_mat_fires_both_attribute_and_event_rules_from_mixed_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), MATTER_EVENT_CONFIG);
+    let rules = write_rules(dir.path(), MATTER_ATTRIBUTE_AND_EVENT_RULES);
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--listen-once-mat",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_MAT_BIN", &fixture("mat_listen_mixed_once.sh")),
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("off fan"), "stdout: {stdout}");
+    assert!(stdout.contains("on lamp"), "stdout: {stdout}");
+    // イベントトリガの発火は 1 回だけ（バッチに一致行は 1 件しかない）。
+    assert_eq!(stdout.matches("on lamp").count(), 1, "stdout: {stdout}");
+}
