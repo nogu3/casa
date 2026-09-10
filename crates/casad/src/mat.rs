@@ -94,7 +94,7 @@ fn log_received(line: &Incoming) {
             value = %ev.value,
             priming = ev.priming,
             recovered = ev.recovered,
-            "event received"
+            "attribute received"
         ),
         Incoming::Event(ev) => tracing::debug!(
             node_id = ev.node_id,

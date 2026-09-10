@@ -218,7 +218,7 @@ Web page / LLM / other client
     Matter device *event* lines (`event` key); `when = { device, event, data? }`
     fires on them (`data` is a partial, type-strict match; `priming` never fires;
     the resident stream de-duplicates by `event_number` per (node, endpoint,
-    cluster) with a `start-up` reset)
+    cluster) with a reset on a live BasicInformation `start-up`)
   - Per-rule active window (`active = { from = "HH:MM", to = "HH:MM" }`): a rule only fires
     inside its window. Half-open (`from` inclusive, `to` exclusive), `from` > `to` wraps over
     midnight, `from` == `to` is a config error, and omitting it means always in effect. It

@@ -592,9 +592,11 @@ fires on them:
   attributes.
 - The resident stream de-duplicates event lines by Matter's `event_number`:
   per (node, endpoint, cluster), a line whose number is not greater than the
-  last one seen is dropped at debug level. A `start-up` event resets that
-  node's watermarks (a factory reset restarts the counter). The watermark is
-  in-memory only and `--listen-once-mat` does not apply it.
+  last one seen is dropped at debug level. A live (non-`priming`)
+  BasicInformation `start-up` event resets that node's watermarks (a factory
+  reset restarts the counter); the priming redelivery of old `start-up`
+  events on a matd restart does not. The watermark is in-memory only and
+  `--listen-once-mat` does not apply it.
 - An event-triggered `off` gets the same `off_grace_secs` treatment as other
   event-triggered `off`s.
 

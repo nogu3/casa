@@ -100,7 +100,7 @@ then = { action = "invoke", device = "some_device", command = "some-command" }
 
 - `accept(&mut self, ev: &MatterEvent) -> bool`
   - `event_number` が `None` → 常に true（watermark は更新しない）。
-  - `event` が `start-up` → その node_id のキーを全部クリアしてから、自身の番号で watermark を設定し true。カウンタ巻き戻し（工場リセット等）対策。
+  - `priming: false` かつ cluster が BasicInformation かつ `event` が `start-up` → その node_id のキーを全部クリアしてから、自身の番号で watermark を設定し true。カウンタ巻き戻し（工場リセット等）対策。
   - `event_number <= watermark` → false（呼び側が debug ログで捨てる）。
   - それ以外 → watermark を更新して true。
 - `priming: true` の行も `accept` を通す（watermark を更新する）。発火しないのは `matter_event_matches` 側の責務。
@@ -122,6 +122,7 @@ then = { action = "invoke", device = "some_device", command = "some-command" }
 ## 既知の割り切り
 
 - `event_number` の巻き戻りは `start-up` イベントでのみ検出する。`start-up` が届かずにカウンタが戻った場合、その node のイベントは番号が watermark を超えるまで捨てられる（casad 再起動で復旧）。実機で観測されたら改めて扱う。
+- `priming: true` の `start-up` は watermark をリセットしない（matd 再起動のたびに全 watermark が消えるのを避ける）。ストリーム断中に工場リセットされた node は、live の start-up が来ない限り番号が watermark を超えるまで捨てられる（casad 再起動で復旧）。
 - デデュープキーが cluster 単位なので、matd が異クラスタ間で順序を入れ替えて配っても取りこぼさない。同一クラスタ内での順序入れ替えは想定しない。
 - `data` のキー名は検証しない（イベントごとのスキーマを casad は知らない）。
 

@@ -353,13 +353,13 @@ fn check_matter_device(config: &Config, rule_name: &str, device: &str) -> Result
         casa_core::config::Device::Matter { node_id: None, .. } => Err(CasaError::new(
             ErrorKind::ConfigParse,
             format!(
-                "rule \"{rule_name}\": device \"{device}\" is a matter group (groupcast) with no node_id; a matter event trigger requires a node_id device"
+                "rule \"{rule_name}\": device \"{device}\" is a matter group (groupcast) with no node_id; a matter trigger requires a node_id device"
             ),
         )),
         other => Err(CasaError::new(
             ErrorKind::ProtocolUnsupported,
             format!(
-                "rule \"{rule_name}\": matter event trigger requires a matter device, but \"{device}\" is {}",
+                "rule \"{rule_name}\": matter trigger requires a matter device, but \"{device}\" is {}",
                 other.protocol()
             ),
         )),

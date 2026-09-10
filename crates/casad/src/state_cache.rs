@@ -27,7 +27,7 @@ impl StateCache {
         }
     }
 
-    /// mat listen イベント 1 件を取り込む。OnOff クラスタの on-off（bool 値）
+    /// mat listen の属性行 1 件を取り込む。OnOff クラスタの on-off（bool 値）
     /// 以外は無視する。priming / recovered も取り込む（現在値の知識として有効）。
     pub fn record(&self, ev: &mat::AttributeChange) {
         self.record_at(ev, Instant::now());
