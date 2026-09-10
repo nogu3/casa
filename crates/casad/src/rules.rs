@@ -140,6 +140,16 @@ pub enum Trigger {
         attribute: String,
         equals: serde_json::Value,
     },
+    /// Matter デバイスイベント: あるデバイスが指定イベントを発したとき（mat listen の
+    /// event 行、mat 1.36.0+）。`data` は省略可。書いたキーだけをイベントの `data` と
+    /// JSON 値として型込みで等値比較し、書いていないキーは無視する（部分一致）。
+    /// 例: `when = { device = "wall_switch", event = "multi-press-complete", data = { "total-number-of-presses-counted" = 2 } }`
+    MatterEvent {
+        device: String,
+        event: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Map<String, serde_json::Value>>,
+    },
     /// 時刻: 毎日その時刻（HH:MM）になったとき。
     /// 例: `when = { at = "22:00" }`
     Time { at: String },
@@ -233,6 +243,20 @@ pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
                 format!("rule \"{}\": then is empty", rule.name),
             ));
         }
+        if let Trigger::MatterEvent {
+            data: Some(data), ..
+        } = &rule.when
+        {
+            if data.is_empty() {
+                return Err(CasaError::new(
+                    ErrorKind::ConfigParse,
+                    format!(
+                        "rule \"{}\": when.data is empty; omit data to match on the event name alone",
+                        rule.name
+                    ),
+                ));
+            }
+        }
     }
 
     Ok(file)
@@ -283,6 +307,9 @@ impl RuleFile {
                     check_device(config, &rule.name, device)?;
                 }
                 Trigger::MatterAttribute { device, .. } => {
+                    check_matter_device(config, &rule.name, device)?;
+                }
+                Trigger::MatterEvent { device, .. } => {
                     check_matter_device(config, &rule.name, device)?;
                 }
                 Trigger::Time { .. } => {}
@@ -668,6 +695,157 @@ node_id = "not_a_number"
 "#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn parses_matter_device_event_rule_with_data() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "2回押しで消灯"
+when = { device = "wall_switch", event = "multi-press-complete", data = { "total-number-of-presses-counted" = 2 } }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].when {
+            Trigger::MatterEvent {
+                device,
+                event,
+                data,
+            } => {
+                assert_eq!(device, "wall_switch");
+                assert_eq!(event, "multi-press-complete");
+                let data = data.as_ref().expect("data が None");
+                assert_eq!(
+                    data.get("total-number-of-presses-counted"),
+                    Some(&serde_json::json!(2))
+                );
+            }
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_matter_device_event_rule_without_data() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "起動検知"
+when = { device = "study_motion", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        match &file.rules[0].when {
+            Trigger::MatterEvent { event, data, .. } => {
+                assert_eq!(event, "start-up");
+                assert!(data.is_none());
+            }
+            other => panic!("unexpected trigger: {other:?}"),
+        }
+        // JSON 化しても data は省略される（casad check の出力）。
+        let v = serde_json::to_value(&file.rules).unwrap();
+        assert!(v[0]["when"].get("data").is_none());
+    }
+
+    #[test]
+    fn matter_device_event_rule_rejects_empty_data() {
+        // 空の data は「省略」と区別がつかず書き間違いで無条件発火するので弾く。
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "空data"
+when = { device = "study_motion", event = "state-change", data = {} }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("空data"), "{}", err.detail);
+        assert!(err.detail.contains("data"), "{}", err.detail);
+    }
+
+    #[test]
+    fn attribute_rule_still_parses_as_matter_attribute() {
+        // attribute キーは従来どおり MatterAttribute に落ちる（MatterEvent に吸われない）。
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "属性"
+when = { device = "study_motion", attribute = "occupancy", equals = 0 }
+then = { action = "off", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            file.rules[0].when,
+            Trigger::MatterAttribute { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_matter_device_event_rule() {
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "起動検知"
+when = { device = "study_motion", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        file.validate(&config_with_matter()).unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_matter_device_event_rule_on_non_matter_or_group() {
+        // ECHONET デバイスは不可。
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "echonet"
+when = { device = "washstand_light", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&config_with_matter()).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ProtocolUnsupported);
+        assert!(err.detail.contains("echonet"));
+
+        // groupcast デバイス（node_id 無し）も不可。
+        let cfg = casa_core::config::parse(
+            r#"
+version = 1
+[devices.hall_lights]
+protocol = "matter"
+group = "hall_group"
+[devices.desk_tape_light]
+protocol = "matter"
+node_id = "6"
+"#,
+        )
+        .unwrap();
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "group"
+when = { device = "hall_lights", event = "start-up" }
+then = { action = "on", device = "desk_tape_light" }
+"#,
+        )
+        .unwrap();
+        let err = file.validate(&cfg).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("group"));
     }
 
     #[test]

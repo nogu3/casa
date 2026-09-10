@@ -177,6 +177,7 @@ pub fn due_time_rules(file: &RuleFile, now: NaiveTime) -> Vec<&Rule> {
                 .unwrap_or(false),
             Trigger::Event { .. } => false,
             Trigger::MatterAttribute { .. } => false,
+            Trigger::MatterEvent { .. } => false,
         })
         .filter(|r| active_or_log(r, now))
         .collect()
@@ -453,10 +454,12 @@ pub fn run(
         .rules
         .iter()
         .any(|r| matches!(r.when, Trigger::Event { .. }));
-    let has_matter_events = file
-        .rules
-        .iter()
-        .any(|r| matches!(r.when, Trigger::MatterAttribute { .. }));
+    let has_matter_events = file.rules.iter().any(|r| {
+        matches!(
+            r.when,
+            Trigger::MatterAttribute { .. } | Trigger::MatterEvent { .. }
+        )
+    });
 
     // scope で借用を渡し、Arc/clone なしにループ群 + ワーカー群を並行させる。
     // アクション実行はデバイス別ワーカーに非同期投入する（同一デバイス FIFO・

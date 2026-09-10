@@ -132,7 +132,7 @@ fn grace_applies(job: &Job<'_>, policy: WorkerPolicy) -> bool {
         && matches!(job.then, Then::Off { .. })
         && matches!(
             job.rule.when,
-            Trigger::Event { .. } | Trigger::MatterAttribute { .. }
+            Trigger::Event { .. } | Trigger::MatterAttribute { .. } | Trigger::MatterEvent { .. }
         )
 }
 
