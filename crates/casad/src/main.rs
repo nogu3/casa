@@ -3,6 +3,7 @@ mod cli;
 mod dispatch;
 mod engine;
 mod enl;
+mod event_dedupe;
 mod mat;
 mod rules;
 mod state_cache;

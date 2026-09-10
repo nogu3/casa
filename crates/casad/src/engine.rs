@@ -15,6 +15,7 @@ use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
 use crate::dispatch::{distinct_devices, Dispatcher, Job, WorkerPolicy};
+use crate::event_dedupe::EventWatermark;
 use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Then, Trigger};
 use crate::state_cache::StateCache;
 use crate::{casa_runner, enl, mat};
@@ -566,11 +567,13 @@ fn event_loop<'env>(
     }
 }
 
-/// Matter イベントリスナ。常駐 `mat listen --count 0` を 1 本張り、イベントごとに
-/// 一致ルールをワーカーに積む。one-shot の繰り返しでは再 spawn の空白で matd の
-/// broadcast からこぼれる（prime バーストの recovered 昇格を取りこぼし、盲目期間の
-/// 遷移が発火しない — 2026-07-27 の書斎ライト事象）ため、ストリームを維持する。
+/// Matter イベントリスナ。常駐 `mat listen --count 0` を 1 本張り、行ごとに一致ルールを
+/// ワーカーに積む。one-shot の繰り返しでは再 spawn の空白で matd の broadcast から
+/// こぼれる（prime バーストの recovered 昇格を取りこぼし、盲目期間の遷移が発火しない —
+/// 2026-07-27 の書斎ライト事象）ため、ストリームを維持する。
 /// ストリームが切れたら（matd 再起動・mat 不在等）バックオフして張り直す。
+/// デバイスイベント行は `event_number` の単調性で重複配達を落とす（watermark は
+/// 張り直しをまたいで保持する — 再購読の priming 再配達は既知の番号なので落ちる）。
 fn matter_event_loop<'env>(
     file: &'env RuleFile,
     config: &Config,
@@ -578,12 +581,29 @@ fn matter_event_loop<'env>(
     dispatcher: &Dispatcher<'env>,
     cache: &StateCache,
 ) -> ! {
+    let mut watermark = EventWatermark::new();
     loop {
         let result = mat::listen_stream(mat_bin, |incoming| {
-            if let mat::Incoming::Attribute(ev) = &incoming {
-                // off no-op スキップ用の最終値キャッシュを先に更新する（priming 含む —
-                // 現在値の再配達はキャッシュには有効な知識）。
-                cache.record(ev);
+            match &incoming {
+                mat::Incoming::Attribute(ev) => {
+                    // off no-op スキップ用の最終値キャッシュを先に更新する（priming 含む —
+                    // 現在値の再配達はキャッシュには有効な知識）。
+                    cache.record(ev);
+                }
+                mat::Incoming::Event(ev) => {
+                    if !watermark.accept(ev) {
+                        tracing::debug!(
+                            node_id = ev.node_id,
+                            endpoint = ev.endpoint,
+                            cluster = %ev.cluster,
+                            event = %ev.event,
+                            event_number = ?ev.event_number,
+                            watermark = ?watermark.watermark_of(ev),
+                            "duplicate matter event dropped"
+                        );
+                        return;
+                    }
+                }
             }
             // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
             let now = Local::now().time();
