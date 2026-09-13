@@ -17,7 +17,7 @@ use chrono::{Local, NaiveTime, Timelike};
 use casa_core::config::{Config, Device};
 use casa_core::error::{CasaError, ErrorKind};
 
-use crate::dispatch::{distinct_devices, Dispatcher, Job, WorkerPolicy};
+use crate::dispatch::{worker_keys, Dispatcher, Job, WorkerPolicy};
 use crate::event_dedupe::EventWatermark;
 use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Then, Trigger};
 use crate::state_cache::StateCache;
@@ -511,7 +511,7 @@ pub fn run(
     let cache = &cache;
     std::thread::scope(|s| {
         let policy = WorkerPolicy::from_settings(&file.settings);
-        let dispatcher = Dispatcher::new(s, distinct_devices(file), policy, move |job: Job| {
+        let dispatcher = Dispatcher::new(s, worker_keys(file), policy, move |job: Job| {
             if should_skip_noop_off(&job, config, cache) {
                 tracing::debug!(rule = %job.rule.name, device = job.then.device(),
                     "skipped no-op off (cached state already off)");

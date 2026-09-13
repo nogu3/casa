@@ -55,6 +55,11 @@ pub struct Rule {
     /// ルールが有効な時間帯。未指定なら常時有効。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<ActiveWindow>,
+    /// 実行レーン。同じ lane を持つルールのアクションは、デバイスをまたいで 1 本の
+    /// ワーカーで記載順に直列実行される（1 台ずつ順番に動かしたい機器群向け）。
+    /// 未指定ならデバイスごとのワーカーに振り分けられる（別デバイスは並列）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
     pub then: Thens,
 }
 
@@ -241,6 +246,15 @@ pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
             return Err(CasaError::new(
                 ErrorKind::ConfigParse,
                 format!("rule \"{}\": then is empty", rule.name),
+            ));
+        }
+        if rule.lane.as_deref() == Some("") {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!(
+                    "rule \"{}\": lane is empty; omit lane to run actions on per-device workers",
+                    rule.name
+                ),
             ));
         }
         if let Trigger::MatterEvent {
@@ -749,6 +763,53 @@ then = { action = "on", device = "desk_tape_light" }
         // JSON 化しても data は省略される（casad check の出力）。
         let v = serde_json::to_value(&file.rules).unwrap();
         assert!(v[0]["when"].get("data").is_none());
+    }
+
+    #[test]
+    fn parses_rule_lane() {
+        // lane を書いたルールは値を持ち、書かないルールは None（JSON 出力でも省略）。
+        let file = parse(
+            r#"
+version = 1
+[[rules]]
+name = "並べる"
+when = { at = "18:00" }
+lane = "shutter"
+then = [
+  { action = "on", device = "a" },
+  { action = "on", device = "b" },
+]
+[[rules]]
+name = "並べない"
+when = { at = "19:00" }
+then = { action = "on", device = "a" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(file.rules[0].lane.as_deref(), Some("shutter"));
+        assert!(file.rules[1].lane.is_none());
+        let v = serde_json::to_value(&file.rules).unwrap();
+        assert_eq!(v[0]["lane"], "shutter");
+        assert!(v[1].get("lane").is_none());
+    }
+
+    #[test]
+    fn rule_rejects_empty_lane() {
+        // 空の lane は「未指定」と区別がつかないので弾く。
+        let err = parse(
+            r#"
+version = 1
+[[rules]]
+name = "空lane"
+when = { at = "18:00" }
+lane = ""
+then = { action = "on", device = "a" }
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(err.detail.contains("空lane"), "{}", err.detail);
+        assert!(err.detail.contains("lane"), "{}", err.detail);
     }
 
     #[test]

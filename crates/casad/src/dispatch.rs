@@ -4,11 +4,15 @@
 //! - 同一デバイス宛は 1 本のワーカーが FIFO で処理する（ON→OFF の逆順実行を
 //!   構造的に排除する）。
 //! - 異デバイス間はワーカーが別なので並列に走る。
+//! - ルールに `lane` があると、そのアクションはデバイスではなく lane のワーカーに
+//!   積まれる。同じ lane のルールはデバイスをまたいで記載順に直列実行される
+//!   （中継機が 1 台ずつしか捌けないシャッター群を、UI 側と同じ順番で動かす等）。
 //!
 //! 実行関数 `run` はジェネリクスで注入する。本番は casa の spawn
 //! （[`crate::engine`] の run_one）、テストは記録クロージャを渡す。
 //! ワーカー数は起動時の rules.toml から固定（ホットリロードは無い）。
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::Scope;
@@ -44,12 +48,25 @@ impl WorkerPolicy {
     }
 }
 
-/// rules.toml の全 `then` アクションの対象名の distinct 集合（BTreeSet で順序決定的）。
-pub fn distinct_devices(file: &RuleFile) -> BTreeSet<&str> {
+/// 1 アクションを積むワーカーのキー。ルールに lane があれば `lane:<名前>`、
+/// 無ければ対象デバイス名。
+pub fn worker_key<'a>(rule: &'a Rule, then: &'a Then) -> Cow<'a, str> {
+    match &rule.lane {
+        Some(lane) => Cow::Owned(format!("lane:{lane}")),
+        None => Cow::Borrowed(then.device()),
+    }
+}
+
+/// rules.toml の全 `then` アクションのワーカーキーの distinct 集合（BTreeSet で順序決定的）。
+pub fn worker_keys(file: &RuleFile) -> BTreeSet<String> {
     file.rules
         .iter()
-        .flat_map(|r| r.then.actions())
-        .map(|t| t.device())
+        .flat_map(|r| {
+            r.then
+                .actions()
+                .iter()
+                .map(move |t| worker_key(r, t).into_owned())
+        })
         .collect()
 }
 
@@ -67,12 +84,13 @@ pub struct Dispatcher<'env> {
 }
 
 impl<'env> Dispatcher<'env> {
-    /// デバイスごとにチャネルとワーカースレッドを `scope` 内に張る。
+    /// ワーカーキー（デバイス名または `lane:<名前>`）ごとにチャネルとワーカースレッドを
+    /// `scope` 内に張る。
     /// ワーカーは全 Sender が drop されるとキューを掃いて終了する
     /// （常駐では到達しない。テストではこれが「全アクション完了」の同期点になる）。
     pub fn new<'scope, F>(
         scope: &'scope Scope<'scope, 'env>,
-        devices: impl IntoIterator<Item = &'env str>,
+        keys: impl IntoIterator<Item = impl Into<String>>,
         policy: WorkerPolicy,
         run: F,
     ) -> Self
@@ -80,10 +98,10 @@ impl<'env> Dispatcher<'env> {
         F: Fn(Job<'env>) + Send + Copy + 'scope,
     {
         let mut senders = HashMap::new();
-        for device in devices {
+        for key in keys {
             let (tx, rx) = mpsc::channel::<Job<'env>>();
             scope.spawn(move || worker_loop(rx, policy, run));
-            senders.insert(device.to_string(), tx);
+            senders.insert(key.into(), tx);
         }
         Dispatcher { senders }
     }
@@ -93,11 +111,12 @@ impl<'env> Dispatcher<'env> {
     /// 到達しない防御分岐（warn して false）。
     fn dispatch_job(&self, job: Job<'env>) -> bool {
         let device = job.then.device();
-        let Some(tx) = self.senders.get(device) else {
-            tracing::warn!(rule = %job.rule.name, device, "no worker for device; dropping action");
+        let key = worker_key(job.rule, job.then);
+        let Some(tx) = self.senders.get(key.as_ref()) else {
+            tracing::warn!(rule = %job.rule.name, device, worker = %key, "no worker for device; dropping action");
             return false;
         };
-        tracing::debug!(rule = %job.rule.name, device, "queueing rule action");
+        tracing::debug!(rule = %job.rule.name, device, worker = %key, "queueing rule action");
         match tx.send(job) {
             Ok(()) => true,
             Err(_) => {
@@ -127,8 +146,11 @@ impl<'env> Dispatcher<'env> {
 
 /// この job に off-grace を適用するか。イベント由来（人感などの連射源）の off のみ。
 /// 時刻トリガの off は即時実行（保留しても取り消される見込みが無く、遅れるだけ）。
+/// lane 付きルールも対象外: lane のワーカーは複数デバイスを抱えるため、保留した off が
+/// 別デバイスの on に誤って破棄されうる。
 fn grace_applies(job: &Job<'_>, policy: WorkerPolicy) -> bool {
     !policy.off_grace.is_zero()
+        && job.rule.lane.is_none()
         && matches!(job.then, Then::Off { .. })
         && matches!(
             job.rule.when,
@@ -136,7 +158,8 @@ fn grace_applies(job: &Job<'_>, policy: WorkerPolicy) -> bool {
         )
 }
 
-/// 1 デバイス分のワーカーループ。FIFO 実行に off-grace / conflation / min-gap を重ねる。
+/// 1 ワーカー分のループ。FIFO 実行に off-grace / conflation / min-gap を重ねる。
+/// min-gap は送信先デバイスごとに測る（lane のワーカーでも別デバイス同士は待たない）。
 ///
 /// - イベント由来の off は `pending_off` に予約し、grace 満了まで送らない。
 /// - on が来たら予約 off を破棄して on を実行（off→on 連射がデバイスに届かない）。
@@ -147,18 +170,19 @@ fn grace_applies(job: &Job<'_>, policy: WorkerPolicy) -> bool {
 ///   以後 on は来ない）。
 fn worker_loop<'env, F: Fn(Job<'env>)>(rx: Receiver<Job<'env>>, policy: WorkerPolicy, run: F) {
     let mut pending_off: Option<(Instant, Job<'env>)> = None;
-    let mut last_sent: Option<Instant> = None;
+    let mut last_sent: HashMap<&'env str, Instant> = HashMap::new();
 
-    // min-gap を尊重して実行し、送信時刻を記録する。
-    let exec = |job: Job<'env>, last_sent: &mut Option<Instant>| {
-        if let Some(last) = *last_sent {
+    // min-gap を尊重して実行し、送信先デバイスごとに送信時刻を記録する。
+    let exec = |job: Job<'env>, last_sent: &mut HashMap<&'env str, Instant>| {
+        let device = job.then.device();
+        if let Some(last) = last_sent.get(device) {
             let since = last.elapsed();
             if since < policy.min_gap {
                 std::thread::sleep(policy.min_gap - since);
             }
         }
         run(job);
-        *last_sent = Some(Instant::now());
+        last_sent.insert(device, Instant::now());
     };
 
     loop {
@@ -223,6 +247,7 @@ mod tests {
                 at: "00:00".to_string(),
             },
             active: None,
+            lane: None,
             then: Thens::One(Then::On {
                 device: device.to_string(),
             }),
@@ -237,6 +262,7 @@ mod tests {
                 at: "00:00".to_string(),
             },
             active: None,
+            lane: None,
             then: Thens::Many(
                 devices
                     .iter()
@@ -258,6 +284,7 @@ mod tests {
                 equals: "0x30".to_string(),
             },
             active: None,
+            lane: None,
             then: Thens::One(then),
         }
     }
@@ -340,6 +367,7 @@ mod tests {
                 at: "22:00".to_string(),
             },
             active: None,
+            lane: None,
             then: Thens::One(off("dev_a")),
         };
         let policy = WorkerPolicy {
@@ -431,8 +459,200 @@ mod tests {
         assert_eq!(*log.lock().unwrap(), ["off"]);
     }
 
+    /// lane 付きのテスト用ルール。when は使われないので固定でよい。
+    fn lane_rule(name: &str, lane: &str, when: Trigger, then: Vec<Then>) -> Rule {
+        Rule {
+            name: name.to_string(),
+            when,
+            active: None,
+            lane: Some(lane.to_string()),
+            then: Thens::Many(then),
+        }
+    }
+
+    fn at(hm: &str) -> Trigger {
+        Trigger::Time { at: hm.to_string() }
+    }
+
     #[test]
-    fn distinct_devices_dedupes_then_targets() {
+    fn lane_runs_different_devices_serially_in_declaration_order() {
+        // lane 無しなら並列（遅い dev_a より dev_b が先に完走する）。lane 付きでは
+        // 1 本のワーカーで記載順に直列実行されるので、遅い dev_a が先に完走する。
+        let r = lane_rule(
+            "shutters",
+            "shutter",
+            at("18:00"),
+            vec![on("dev_a"), on("dev_b"), on("dev_c")],
+        );
+        let done = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, worker_keys_of(&[&r]), WorkerPolicy::ZERO, |j: Job| {
+                if j.then.device() == "dev_a" {
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                done.lock().unwrap().push(j.then.device().to_string());
+            });
+            assert_eq!(d.dispatch(&r), 3);
+            drop(d);
+        });
+        assert_eq!(*done.lock().unwrap(), ["dev_a", "dev_b", "dev_c"]);
+    }
+
+    #[test]
+    fn rules_sharing_a_lane_do_not_interleave() {
+        // 同じ lane の 2 ルールは、先に積んだルールの全アクションが終わってから次が走る
+        // （開→閉の連続発話でシャッター宛の命令が交互に混ざらない）。
+        let open = lane_rule(
+            "open",
+            "shutter",
+            at("07:00"),
+            vec![on("dev_a"), on("dev_b")],
+        );
+        let close = lane_rule(
+            "close",
+            "shutter",
+            at("18:00"),
+            vec![off("dev_a"), off("dev_b")],
+        );
+        let log = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(
+                s,
+                worker_keys_of(&[&open, &close]),
+                WorkerPolicy::ZERO,
+                |j: Job| {
+                    std::thread::sleep(Duration::from_millis(30));
+                    log.lock()
+                        .unwrap()
+                        .push(format!("{}:{}", j.rule.name, j.then.device()));
+                },
+            );
+            assert_eq!(d.dispatch(&open), 2);
+            assert_eq!(d.dispatch(&close), 2);
+            drop(d);
+        });
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["open:dev_a", "open:dev_b", "close:dev_a", "close:dev_b"]
+        );
+    }
+
+    #[test]
+    fn lane_event_off_is_not_held_in_grace() {
+        // lane のワーカーは複数デバイスを抱えるので、off を保留すると別デバイスの on に
+        // 誤って破棄されうる。lane 付きルールには off-grace を適用しない。
+        let r = Rule {
+            name: "leave".to_string(),
+            when: Trigger::Event {
+                device: "sensor".to_string(),
+                epc: "0x80".to_string(),
+                equals: "0x30".to_string(),
+            },
+            active: None,
+            lane: Some("room".to_string()),
+            then: Thens::Many(vec![off("dev_a"), on("dev_b")]),
+        };
+        let policy = WorkerPolicy {
+            off_grace: Duration::from_secs(10),
+            min_gap: Duration::ZERO,
+        };
+        let log = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, worker_keys_of(&[&r]), policy, |j: Job| {
+                log.lock()
+                    .unwrap()
+                    .push(format!("{}:{}", j.then.action_name(), j.then.device()));
+            });
+            assert_eq!(d.dispatch(&r), 2);
+            // grace(10s) を待たずに両方実行されている（Sender 生存中に確認する）。
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(*log.lock().unwrap(), ["off:dev_a", "on:dev_b"]);
+            drop(d);
+        });
+    }
+
+    #[test]
+    fn lane_min_gap_spaces_only_repeated_commands_to_the_same_device() {
+        // min-gap は「同一デバイスへの連続送信」の間隔。lane 内でも別デバイス同士は
+        // 間隔を空けず、同じデバイスへ戻ったときだけ待つ。
+        let r = lane_rule(
+            "gap",
+            "room",
+            at("00:00"),
+            vec![on("dev_a"), on("dev_b"), off("dev_a")],
+        );
+        let policy = WorkerPolicy {
+            off_grace: Duration::ZERO,
+            min_gap: Duration::from_millis(300),
+        };
+        let started = Instant::now();
+        let times = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let d = Dispatcher::new(s, worker_keys_of(&[&r]), policy, |j: Job| {
+                times
+                    .lock()
+                    .unwrap()
+                    .push((j.then.device().to_string(), started.elapsed()));
+            });
+            assert_eq!(d.dispatch(&r), 3);
+            drop(d);
+        });
+        let t = times.lock().unwrap();
+        assert_eq!(t[1].0, "dev_b");
+        assert!(
+            t[1].1 < Duration::from_millis(200),
+            "dev_b waited: {:?}",
+            t[1].1
+        );
+        assert!(
+            t[2].1 >= Duration::from_millis(300),
+            "dev_a not spaced: {:?}",
+            t[2].1
+        );
+    }
+
+    #[test]
+    fn worker_keys_use_lane_instead_of_devices() {
+        let file = crate::rules::parse(
+            r#"
+version = 1
+[[rules]]
+name = "a"
+when = { at = "07:00" }
+lane = "shutter"
+then = [
+  { action = "on", device = "shutter1" },
+  { action = "on", device = "shutter2" },
+]
+[[rules]]
+name = "b"
+when = { at = "22:00" }
+then = { action = "off", device = "hallway_light" }
+"#,
+        )
+        .unwrap();
+        let keys: Vec<String> = worker_keys(&file).into_iter().collect();
+        assert_eq!(keys, ["hallway_light", "lane:shutter"]);
+    }
+
+    /// テスト用: ルール列からワーカーキー集合を作る（worker_keys と同じ規則）。
+    fn worker_keys_of(rules: &[&Rule]) -> Vec<String> {
+        let mut keys: Vec<String> = rules
+            .iter()
+            .flat_map(|r| {
+                r.then
+                    .actions()
+                    .iter()
+                    .map(move |t| worker_key(r, t).into_owned())
+            })
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    #[test]
+    fn worker_keys_dedupes_then_targets() {
         let file = crate::rules::parse(
             r#"
 version = 1
@@ -451,12 +671,12 @@ then = { action = "off", device = "bedroom_light" }
 "#,
         )
         .unwrap();
-        let devices: Vec<&str> = distinct_devices(&file).into_iter().collect();
+        let devices: Vec<String> = worker_keys(&file).into_iter().collect();
         assert_eq!(devices, ["bedroom_light", "hallway_light"]);
     }
 
     #[test]
-    fn distinct_devices_collects_every_then_action() {
+    fn worker_keys_collects_every_then_action() {
         let file = crate::rules::parse(
             r#"
 version = 1
@@ -474,7 +694,7 @@ then = { action = "off", device = "desk_light" }
 "#,
         )
         .unwrap();
-        let devices: Vec<&str> = distinct_devices(&file).into_iter().collect();
+        let devices: Vec<String> = worker_keys(&file).into_iter().collect();
         assert_eq!(devices, ["desk_light", "desk_tape_light"]);
     }
 
@@ -504,6 +724,7 @@ then = { action = "off", device = "desk_light" }
                 at: "00:00".to_string(),
             },
             active: None,
+            lane: None,
             then: Thens::Many(vec![
                 Then::On {
                     device: "dev_a".to_string(),

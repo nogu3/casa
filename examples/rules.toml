@@ -56,6 +56,21 @@ then = [
   { action = "invoke", device = "bedroom_light", command = "color-temp", args = ["--kelvin", "2700"] },
 ]
 
+# Lane: rules that share a `lane` run their actions on one queue, in declaration
+# order, one at a time — even across different devices. A second rule in the same
+# lane waits until the first rule's actions have finished, so the two never
+# interleave. Useful for devices behind a relay that handles one command at a time.
+# Off-grace does not apply to lane rules; min-gap still spaces repeated commands to
+# the same device.
+[[rules]]
+name = "example lane: lights off one by one"
+when = { at = "23:00" }
+lane = "lights"
+then = [
+  { action = "off", device = "living_light" },
+  { action = "off", device = "bedroom_light" },
+]
+
 # Active window: this rule is only in effect between 06:00 and 21:00. The start is
 # inclusive and the end is exclusive, so it is already inactive at 21:00 sharp.
 # `from` later than `to` wraps over midnight (e.g. from = "21:00", to = "06:00").

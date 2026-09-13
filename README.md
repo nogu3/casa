@@ -472,6 +472,30 @@ parallel. A failing action does not stop the remaining ones. Use a group
 `then = []` (an empty array) is a config error. Ordering is guaranteed within
 a single device's queue; actions from concurrently firing rules may interleave.
 
+`lane = "<name>"` puts a rule's actions on a named queue instead of the
+per-device workers. Every rule with the same lane shares that one queue, so its
+actions run strictly one at a time in declaration order even across different
+devices, and a second rule in the lane waits until the first rule's actions have
+finished (rules never interleave inside a lane). Use it for devices that must
+move in a fixed order or sit behind a relay that handles one command at a time —
+for example five electric shutters on one ECHONET Lite gateway:
+
+```toml
+[[rules]]
+name = "close all shutters at 18:00"
+when = { at = "18:00" }
+lane = "shutter"
+then = [
+  { action = "invoke", device = "shutter1", command = "set", args = ["open_close_operation", "close"] },
+  { action = "invoke", device = "shutter2", command = "set", args = ["open_close_operation", "close"] },
+]
+```
+
+Inside a lane, `off_grace_secs` is not applied (a held `off` could otherwise be
+discarded by an `on` meant for a different device in the same queue), while
+`min_gap_secs` still spaces consecutive commands to the same device. An empty
+`lane = ""` is a config error.
+
 `active = { from = "HH:MM", to = "HH:MM" }` limits a rule to a time window. The
 window is half-open: `from` is included and `to` is excluded, so a rule with
 `to = "21:00"` is already inactive at 21:00 sharp. A `from` later than `to`
@@ -512,8 +536,8 @@ min_gap_secs = 2      # default 2; 0 disables the spacing
   On shutdown a held `off` is flushed immediately instead of waiting out the
   grace.
 - `min_gap_secs` — minimum interval between consecutive commands actually sent
-  to the same device. Applies to every action kind; other devices' workers are
-  unaffected.
+  to the same device. Applies to every action kind; other devices are
+  unaffected, including other devices in the same lane.
 
 Independently of those settings, an `off` to a Matter device is skipped as a
 no-op when the resident `mat listen` stream has recently (within 10 minutes)
