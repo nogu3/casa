@@ -77,6 +77,7 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             let rule_file = rules::load(&rules)?;
             rule_file.validate(&config)?;
             engine::validate_schedule(&rule_file)?;
+            pause::warn_unknown(&rule_file, &pause::load_lenient(&pause::path()));
 
             // 子 CLI は casa と同じ規約（CASA_<BIN>_BIN / [binaries] / PATH）で解決する。
             let enl_bin = casa_core::runner::resolve_bin("enl", &config);

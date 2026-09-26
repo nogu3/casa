@@ -109,6 +109,75 @@ then = { action = "off", device = "living_aircon" }
 }
 
 #[test]
+fn run_once_skips_paused_time_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(dir.path(), SCHEDULE);
+    let pause = dir.path().join("paused.json");
+    std::fs::write(
+        &pause,
+        r#"{"paused":[{"name":"9時にエアコンOFF","since":"t"}]}"#,
+    )
+    .unwrap();
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--once",
+            "--now",
+            "09:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("CASA_PAUSE_FILE", pause.to_str().unwrap()),
+            ("RUST_LOG", "info"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("off living_aircon"),
+        "停止中は発火しない: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("rule skipped: paused"), "stderr: {stderr}");
+}
+
+#[test]
+fn run_once_fires_when_pause_file_is_broken() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(dir.path(), SCHEDULE);
+    let pause = dir.path().join("paused.json");
+    std::fs::write(&pause, "{broken").unwrap();
+
+    let out = run_casad(
+        &[
+            "run",
+            rules.to_str().unwrap(),
+            "--once",
+            "--now",
+            "09:00",
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[
+            ("CASA_BIN", &fixture("casa_stub.sh")),
+            ("CASA_PAUSE_FILE", pause.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("off living_aircon"),
+        "壊れていたら動かす側: {stdout}"
+    );
+}
+
+#[test]
 fn run_now_requires_a_oneshot_flag() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path(), DUMMY_CONFIG);

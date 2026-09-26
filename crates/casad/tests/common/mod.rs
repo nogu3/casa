@@ -35,6 +35,10 @@ pub fn run_casad(args: &[&str], envs: &[(&str, &str)]) -> Output {
     cmd.env_remove("CASA_CONFIG")
         .env_remove("CASA_BIN")
         .env_remove("CASA_FAKE_EXIT");
+    // 開発機の ~/.local/state/casa/paused.json を拾わないよう、既定は存在しないパス。
+    // 個々のテストが envs で CASA_PAUSE_FILE を渡せば後勝ちで上書きされる。
+    cmd.env("CASA_PAUSE_FILE", "/nonexistent/casad-test/paused.json")
+        .env_remove("CASA_RULES");
     cmd.args(args);
     for (k, v) in envs {
         cmd.env(k, v);

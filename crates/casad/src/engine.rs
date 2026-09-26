@@ -19,6 +19,7 @@ use casa_core::error::{CasaError, ErrorKind};
 
 use crate::dispatch::{worker_keys, Dispatcher, Job, WorkerPolicy};
 use crate::event_dedupe::EventWatermark;
+use crate::pause::{self, PauseFile};
 use crate::rules::{parse_node_id, ActiveWindow, Rule, RuleFile, Then, Trigger};
 use crate::state_cache::StateCache;
 use crate::{casa_runner, enl, mat};
@@ -130,6 +131,30 @@ fn active_or_log(rule: &Rule, now: NaiveTime) -> bool {
     false
 }
 
+/// 停止中（pause file に載っている）ルールを落とす。落としたものは info に残す
+/// （「なぜ動かなかったか」を発火ログと同じ粒度で追えるように）。
+pub fn without_paused<'a>(rules: Vec<&'a Rule>, paused: &PauseFile) -> Vec<&'a Rule> {
+    rules
+        .into_iter()
+        .filter(|r| {
+            let p = paused.is_paused(&r.name);
+            if p {
+                tracing::info!(rule = %r.name, "rule skipped: paused");
+            }
+            !p
+        })
+        .collect()
+}
+
+/// 発火直前に pause file を読んで停止中ルールを落とす。候補が無ければ読まない
+/// （毎分の時刻評価で無駄に読まない・壊れたファイルの warn を連打しない）。
+pub fn drop_paused(rules: Vec<&Rule>) -> Vec<&Rule> {
+    if rules.is_empty() {
+        return rules;
+    }
+    without_paused(rules, &pause::load_lenient(&pause::path()))
+}
+
 /// すべての時刻トリガと有効時間帯が正しい HH:MM か検証する。
 /// さらに、両方を持つルールについては `at` がその `active` 窓の中にあるかも検証する
 /// （窓の外にある `at` は静的に「絶対発火しない」と分かるルールなので設定エラーにする）。
@@ -204,7 +229,7 @@ pub fn fire(job: Job<'_>, config_path: Option<&Path>) -> Result<i32, CasaError> 
 /// 返す（ルール数ではない）。個々のアクション失敗はループを止めず warn ログに残す
 /// （常駐の頑健性）。
 pub fn tick(file: &RuleFile, now: NaiveTime, config_path: Option<&Path>) -> usize {
-    fire_all(due_time_rules(file, now), config_path)
+    fire_all(drop_paused(due_time_rules(file, now)), config_path)
 }
 
 /// hex 文字列を正規化する（`0x`/`0X` 接頭辞を外し大文字化・トリム）。
@@ -266,7 +291,10 @@ pub fn fire_due_events(
     now: NaiveTime,
     config_path: Option<&Path>,
 ) -> usize {
-    fire_all(due_event_rules(file, config, events, now), config_path)
+    fire_all(
+        drop_paused(due_event_rules(file, config, events, now)),
+        config_path,
+    )
 }
 
 /// `enl listen` を 1 回起動し、得た通知でイベントトリガを発火する。成功した
@@ -406,7 +434,7 @@ pub fn drain_matter_events_once(
     // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
     // --now が与えられていればそれを優先する（デバッグ用の固定時刻）。
     Ok(fire_all(
-        due_matter_rules(file, config, &lines, now_or(now)),
+        drop_paused(due_matter_rules(file, config, &lines, now_or(now))),
         config_path,
     ))
 }
@@ -536,7 +564,7 @@ pub fn run(
 fn time_loop<'env>(file: &'env RuleFile, dispatcher: &Dispatcher<'env>) -> ! {
     loop {
         let now = Local::now().time();
-        let queued = dispatcher.dispatch_all(due_time_rules(file, now));
+        let queued = dispatcher.dispatch_all(drop_paused(due_time_rules(file, now)));
         if queued > 0 {
             tracing::debug!(queued, "time rule actions queued");
         }
@@ -557,7 +585,8 @@ fn event_loop<'env>(
             Ok(events) => {
                 // 窓判定は listen が返った後の時刻で行う（listen は何時間もブロックしうる）。
                 let now = Local::now().time();
-                let queued = dispatcher.dispatch_all(due_event_rules(file, config, &events, now));
+                let queued = dispatcher
+                    .dispatch_all(drop_paused(due_event_rules(file, config, &events, now)));
                 if queued > 0 {
                     tracing::debug!(queued, "event rule actions queued");
                 }
@@ -610,12 +639,12 @@ fn matter_event_loop<'env>(
             }
             // 窓判定はイベント受信時刻で行う（ストリームは何時間も継続しうる）。
             let now = Local::now().time();
-            let queued = dispatcher.dispatch_all(due_matter_rules(
+            let queued = dispatcher.dispatch_all(drop_paused(due_matter_rules(
                 file,
                 config,
                 std::slice::from_ref(&incoming),
                 now,
-            ));
+            )));
             if queued > 0 {
                 tracing::debug!(queued, "matter event rule actions queued");
             }
@@ -1547,6 +1576,31 @@ then = { action = "on", device = "desk_tape_light" }
             at(21, 30),
         );
         assert!(outside.is_empty());
+    }
+
+    #[test]
+    fn without_paused_drops_only_paused_rules() {
+        let f = rules(
+            r#"
+version = 1
+[[rules]]
+name = "A"
+when = { at = "00:00" }
+then = { action = "off", device = "x" }
+[[rules]]
+name = "B"
+when = { at = "00:00" }
+then = { action = "off", device = "y" }
+"#,
+        );
+        let mut paused = crate::pause::PauseFile::default();
+        paused.pause("A", "t".into());
+        let due = due_time_rules(&f, at(0, 0));
+        let names: Vec<_> = without_paused(due, &paused)
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["B"]);
     }
 
     #[test]
