@@ -241,7 +241,15 @@ pub fn parse(text: &str) -> Result<RuleFile, CasaError> {
         ));
     }
 
+    let mut seen = std::collections::HashSet::new();
     for rule in &file.rules {
+        // 停止（pause）のキーはルール名なので一意でなければならない。
+        if !seen.insert(rule.name.as_str()) {
+            return Err(CasaError::new(
+                ErrorKind::ConfigParse,
+                format!("duplicate rule name \"{}\"", rule.name),
+            ));
+        }
         if rule.then.actions().is_empty() {
             return Err(CasaError::new(
                 ErrorKind::ConfigParse,
@@ -1200,6 +1208,28 @@ then = { action = "off", device = "living_aircon" }
         )
         .unwrap_err();
         assert_eq!(err.kind, ErrorKind::ConfigParse);
+    }
+
+    #[test]
+    fn parse_rejects_duplicate_rule_names() {
+        let text = r#"
+version = 1
+[[rules]]
+name = "同じ"
+when = { at = "07:00" }
+then = { action = "on", device = "a" }
+[[rules]]
+name = "同じ"
+when = { at = "08:00" }
+then = { action = "off", device = "a" }
+"#;
+        let err = parse(text).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::ConfigParse);
+        assert!(
+            err.detail.contains("duplicate rule name \"同じ\""),
+            "{}",
+            err.detail
+        );
     }
 
     #[test]

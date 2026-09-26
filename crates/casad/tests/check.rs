@@ -230,3 +230,34 @@ then = { action = "off", device = "living_aircon" }
     assert_eq!(out.status.code(), Some(10));
     assert_eq!(stderr_error_json(&out)["error"]["kind"], "config_parse");
 }
+
+#[test]
+fn check_rejects_duplicate_rule_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = write_config(dir.path(), DUMMY_CONFIG);
+    let rules = write_rules(
+        dir.path(),
+        r#"
+version = 1
+[[rules]]
+name = "dup"
+when = { at = "07:00" }
+then = { action = "on", device = "living_aircon" }
+[[rules]]
+name = "dup"
+when = { at = "08:00" }
+then = { action = "off", device = "living_aircon" }
+"#,
+    );
+    let out = run_casad(
+        &[
+            "check",
+            rules.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(10));
+    assert_eq!(stderr_error_json(&out)["error"]["kind"], "config_parse");
+}
