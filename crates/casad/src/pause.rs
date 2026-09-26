@@ -109,7 +109,13 @@ pub fn save(path: &Path, file: &PauseFile) -> Result<(), CasaError> {
     }
     let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
     let text = serde_json::to_string_pretty(file).expect("PauseFile serializes");
-    std::fs::write(&tmp, text).map_err(|e| io_err("write", e))?;
+    (|| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    })()
+    .map_err(|e| io_err("write", e))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         io_err("replace", e)
