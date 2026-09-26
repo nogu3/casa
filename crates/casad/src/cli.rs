@@ -40,6 +40,15 @@ pub enum Command {
         /// ルールファイル（rules.toml）のパス
         rules: PathBuf,
     },
+    /// ルールの一覧と一時停止 / 再開。停止状態は pause file（CASA_PAUSE_FILE）に持ち、
+    /// 常駐中の casad は発火直前に毎回読むので再起動なしで効く。
+    Rules {
+        /// ルールファイル（rules.toml）のパス
+        #[arg(long, env = "CASA_RULES", value_name = "PATH")]
+        rules: PathBuf,
+        #[command(subcommand)]
+        action: RulesAction,
+    },
     /// ルールエンジンを起動する。既定は常駐し、時刻トリガ（毎分の境界で評価）と
     /// イベントトリガ（enl listen を回して状変通知に反応）を並行に走らせる。
     #[command(group = clap::ArgGroup::new("oneshot").args(["once", "listen_once", "listen_once_mat"]))]
@@ -61,6 +70,27 @@ pub enum Command {
         /// （デバッグ用。イベントが来るまでブロックする）。
         #[arg(long, conflicts_with_all = ["once", "listen_once"])]
         listen_once_mat: bool,
+    },
+}
+
+/// `casad rules` の操作。
+#[derive(Debug, Subcommand)]
+pub enum RulesAction {
+    /// 全ルールを記載順に出す（停止中かどうか付き）
+    List {
+        /// 1 行の JSON 配列で出す（mando 等の機械向け）
+        #[arg(long)]
+        json: bool,
+    },
+    /// ルールを停止する（再開するまで発火しない）
+    Pause {
+        /// ルール名（rules.toml の name）
+        name: String,
+    },
+    /// 停止中のルールを再開する
+    Resume {
+        /// ルール名（rules.toml の name）
+        name: String,
     },
 }
 

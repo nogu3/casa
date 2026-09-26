@@ -13,9 +13,10 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use casa_core::config;
-use casa_core::error::CasaError;
+use casa_core::error::{CasaError, ErrorKind};
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, RulesAction};
+use crate::rules::Trigger;
 
 fn main() {
     // casa と同じく、診断ログは stderr に構造化（JSON）で出す。レベルは RUST_LOG で制御。
@@ -64,6 +65,75 @@ fn run(cli: Cli) -> Result<i32, CasaError> {
             });
             println!("{summary}");
             Ok(0)
+        }
+        Command::Rules { rules, action } => {
+            let config = config::load(cli.config.as_deref())?;
+            let rule_file = rules::load(&rules)?;
+            rule_file.validate(&config)?;
+            let path = pause::path();
+            match action {
+                RulesAction::List { json } => {
+                    let paused = pause::load(&path)?;
+                    let items: Vec<serde_json::Value> = rule_file
+                        .rules
+                        .iter()
+                        .map(|r| {
+                            let mut o = serde_json::json!({
+                                "name": r.name,
+                                "trigger": if matches!(r.when, Trigger::Time { .. }) { "time" } else { "event" },
+                                "paused": paused.is_paused(&r.name),
+                            });
+                            if let Trigger::Time { at } = &r.when {
+                                o["at"] = at.clone().into();
+                            }
+                            if let Some(since) = paused.since(&r.name) {
+                                o["since"] = since.into();
+                            }
+                            o
+                        })
+                        .collect();
+                    if json {
+                        println!("{}", serde_json::Value::Array(items));
+                    } else {
+                        for i in &items {
+                            let mark = if i["paused"] == true { "⏸" } else { " " };
+                            let at = i["at"].as_str().unwrap_or("-");
+                            println!("{mark} {at:>5}  {}", i["name"].as_str().unwrap_or(""));
+                        }
+                    }
+                    pause::warn_unknown(&rule_file, &paused);
+                    Ok(0)
+                }
+                RulesAction::Pause { name } => {
+                    if !rule_file.rules.iter().any(|r| r.name == name) {
+                        return Err(CasaError::new(
+                            ErrorKind::NameNotFound,
+                            format!("rule not found: {name}"),
+                        ));
+                    }
+                    let mut paused = pause::load(&path)?;
+                    if paused.pause(&name, pause::now_rfc3339()) {
+                        pause::save(&path, &paused)?;
+                        tracing::info!(rule = %name, "rule paused");
+                    }
+                    Ok(0)
+                }
+                RulesAction::Resume { name } => {
+                    let mut paused = pause::load(&path)?;
+                    if paused.resume(&name) {
+                        pause::save(&path, &paused)?;
+                        tracing::info!(rule = %name, "rule resumed");
+                    } else if !rule_file.rules.iter().any(|r| r.name == name) {
+                        // rules.toml にも pause file にも無い＝打ち間違い。停止中でない既知ルールの
+                        // resume は冪等に成功させる。
+                        return Err(CasaError::new(
+                            ErrorKind::NameNotFound,
+                            format!("rule not found: {name}"),
+                        ));
+                    }
+                    Ok(0)
+                }
+            }
         }
         Command::Run {
             rules,

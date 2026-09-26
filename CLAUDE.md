@@ -240,6 +240,9 @@ Web page / LLM / other client
     (`invoke` takes `device` / `command` / arbitrary `args` and delegates to `casa invoke`). `then` accepts either a
     single table or an array of actions; array members are dispatched per target device (same device = declaration
     order, different devices = parallel), and a failing action does not stop the rest.
+  - `casad rules list [--json]` / `casad rules pause <NAME>` / `casad rules resume <NAME>` — temporarily pause a
+    rule. State is kept in `CASA_PAUSE_FILE` (default `$XDG_STATE_HOME/casa/paused.json`); the resident casad reads
+    it fresh right before every firing, so no restart is needed. `rules.toml` is given via `--rules` or `CASA_RULES`.
 - Subscription to ECHONET INF notifications (via `enl listen`; the enl side is designed so "listen is driven from an external loop") — **implemented**
 - Subscription to Matter attribute changes (via `mat listen`, a thin client to
   `matd`'s resident Subscribe; requires a running `matd`) — **implemented**

@@ -28,8 +28,6 @@ impl PauseFile {
         self.paused.iter().any(|p| p.name == name)
     }
 
-    // Task 4（`casad rules list/pause/resume`）で使うまでの一時的な許可。
-    #[allow(dead_code)]
     pub fn since(&self, name: &str) -> Option<&str> {
         self.paused
             .iter()
@@ -38,8 +36,6 @@ impl PauseFile {
     }
 
     /// 停止中に加える。既に停止中なら何もせず false（since は最初の値を保つ）。
-    // Task 4（`casad rules list/pause/resume`）で使うまでの一時的な許可。
-    #[allow(dead_code)]
     pub fn pause(&mut self, name: &str, since: String) -> bool {
         if self.is_paused(name) {
             return false;
@@ -52,8 +48,6 @@ impl PauseFile {
     }
 
     /// 停止中から外す。停止中でなければ何もせず false。
-    // Task 4（`casad rules list/pause/resume`）で使うまでの一時的な許可。
-    #[allow(dead_code)]
     pub fn resume(&mut self, name: &str) -> bool {
         let before = self.paused.len();
         self.paused.retain(|p| p.name != name);
@@ -103,8 +97,6 @@ pub fn load_lenient(path: &Path) -> PauseFile {
 }
 
 /// 同じディレクトリの一時ファイルへ書いて rename する（読み手に途中状態を見せない）。
-// Task 4（`casad rules pause/resume`）で使うまでの一時的な許可。
-#[allow(dead_code)]
 pub fn save(path: &Path, file: &PauseFile) -> Result<(), CasaError> {
     let io_err = |what: &str, e: std::io::Error| {
         CasaError::new(
@@ -124,8 +116,6 @@ pub fn save(path: &Path, file: &PauseFile) -> Result<(), CasaError> {
     })
 }
 
-// Task 4（`casad rules pause`）で使うまでの一時的な許可。
-#[allow(dead_code)]
 pub fn now_rfc3339() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
