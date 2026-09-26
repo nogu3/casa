@@ -5,6 +5,7 @@ mod engine;
 mod enl;
 mod event_dedupe;
 mod mat;
+mod pause;
 mod rules;
 mod state_cache;
 
