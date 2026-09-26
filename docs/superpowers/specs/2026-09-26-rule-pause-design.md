@@ -119,7 +119,8 @@ rules.toml のパスは `--rules <PATH>`、省略時は環境変数 `CASA_RULES`
 | pause file が無い | 停止中なし（正常） |
 | pause file が壊れている / 読めない | 停止中なしとみなし warn。`rules pause/resume` はエラー終了（壊れたファイルを上書きしない） |
 | 書き込み失敗 | `rules pause/resume` が exit 非 0。mando は失敗を UI に表示 |
-| 未知のルール名を pause/resume | exit 非 0 |
+| 未知のルール名を pause | exit 非 0（11） |
+| rules.toml に無い名前を resume | pause file にあれば外して exit 0（改名・削除の取り残しの掃除手段）。どちらにも無ければ exit 11 |
 | pause file に rules.toml に無い名前 | 無視＋warn |
 
 ## テスト
