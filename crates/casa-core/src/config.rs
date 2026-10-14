@@ -50,6 +50,10 @@ pub enum Device {
     Androidtv {
         /// TV の IP アドレス。atv は名前解決しないので IP のみ（DHCP 予約推奨）。
         host: String,
+        /// TV の MAC アドレス。指定すると `on` で atv に `--mac` を渡し、深いスタンバイで
+        /// 到達不能なときに Wake-on-LAN を送らせる（有線接続の TV 向け）。
+        #[serde(default)]
+        mac: Option<String>,
     },
     Matter {
         /// unicast 宛先の node_id。`group` と排他（ロード時に検証）。
@@ -330,10 +334,29 @@ host = "192.0.2.10"
 "#;
         let config = parse(text).unwrap();
         match config.device("living_tv").unwrap() {
-            Device::Androidtv { host } => assert_eq!(host, "192.0.2.10"),
+            Device::Androidtv { host, mac } => {
+                assert_eq!(host, "192.0.2.10");
+                assert_eq!(*mac, None);
+            }
             other => panic!("unexpected device: {other:?}"),
         }
         assert_eq!(config.device("living_tv").unwrap().protocol(), "androidtv");
+    }
+
+    #[test]
+    fn parses_androidtv_device_with_mac() {
+        let text = r#"
+version = 1
+[devices.living_tv]
+protocol = "androidtv"
+host = "192.0.2.10"
+mac = "aa:bb:cc:dd:ee:ff"
+"#;
+        let config = parse(text).unwrap();
+        match config.device("living_tv").unwrap() {
+            Device::Androidtv { mac, .. } => assert_eq!(mac.as_deref(), Some("aa:bb:cc:dd:ee:ff")),
+            other => panic!("unexpected device: {other:?}"),
+        }
     }
 
     #[test]

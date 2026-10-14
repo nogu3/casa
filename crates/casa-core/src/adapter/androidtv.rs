@@ -10,6 +10,8 @@
 //!
 //! アドレス（host）は atv では常に `--host` フラグ（サブコマンド直後に注入）。
 //! ペアリング証明書は atv 側の責務（`~/.config/atv/`）で、casa は何も渡さない。
+//! `mac` があれば `on` にだけ `--mac` を付ける（atv の WoL フォールバック。`off` は
+//! TV が起きていないと意味が無いので付けない）。
 
 use super::{Adapter, Invocation};
 use crate::config::Device;
@@ -22,7 +24,7 @@ pub struct AndroidtvAdapter;
 /// 行うので、他 variant が来ることはない。
 fn host(device: &Device) -> Option<&str> {
     match device {
-        Device::Androidtv { host } => Some(host),
+        Device::Androidtv { host, .. } => Some(host),
         _ => None,
     }
 }
@@ -31,7 +33,13 @@ impl Adapter for AndroidtvAdapter {
     /// `on`/`off` は atv の同名サブコマンドへ。冪等性は atv 側が保証する。
     fn power(&self, device: &Device, on: bool) -> Option<Invocation> {
         let command = if on { "on" } else { "off" };
-        self.invoke(device, command, &[])
+        let extra = match device {
+            Device::Androidtv { mac: Some(mac), .. } if on => {
+                vec!["--mac".to_string(), mac.clone()]
+            }
+            _ => vec![],
+        };
+        self.invoke(device, command, &extra)
     }
 
     /// 長尾のプロトコル固有操作。`command` は atv のサブコマンド名（`status` 等）を
@@ -55,6 +63,14 @@ mod tests {
     fn device() -> Device {
         Device::Androidtv {
             host: "192.0.2.10".into(),
+            mac: None,
+        }
+    }
+
+    fn device_with_mac() -> Device {
+        Device::Androidtv {
+            host: "192.0.2.10".into(),
+            mac: Some("aa:bb:cc:dd:ee:ff".into()),
         }
     }
 
@@ -72,6 +88,21 @@ mod tests {
     #[test]
     fn power_off_builds_atv_off_with_host() {
         let inv = AndroidtvAdapter.power(&device(), false).unwrap();
+        assert_eq!(args(&inv), ["off", "--host", "192.0.2.10"]);
+    }
+
+    #[test]
+    fn power_on_with_mac_adds_wol_fallback() {
+        let inv = AndroidtvAdapter.power(&device_with_mac(), true).unwrap();
+        assert_eq!(
+            args(&inv),
+            ["on", "--host", "192.0.2.10", "--mac", "aa:bb:cc:dd:ee:ff"]
+        );
+    }
+
+    #[test]
+    fn power_off_with_mac_omits_mac() {
+        let inv = AndroidtvAdapter.power(&device_with_mac(), false).unwrap();
         assert_eq!(args(&inv), ["off", "--host", "192.0.2.10"]);
     }
 

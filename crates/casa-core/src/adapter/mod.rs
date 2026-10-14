@@ -97,6 +97,7 @@ mod tests {
     fn androidtv_devices_dispatch_to_androidtv_adapter() {
         let device = Device::Androidtv {
             host: "192.0.2.10".into(),
+            mac: None,
         };
         let adapter = adapter_for(&device).unwrap();
         assert_eq!(adapter.power(&device, true).unwrap().bin, "atv");

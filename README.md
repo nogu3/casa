@@ -279,7 +279,7 @@ right after the subcommand):
 
 ```
 # casa on <name> / casa off <name>
-atv on --host <host>
+atv on --host <host> [--mac <mac>]
 atv off --host <host>
 # casa invoke <name> status  (read the power state)
 atv status --host <host>
@@ -289,6 +289,7 @@ atv status --host <host>
 [devices.living_tv]
 protocol = "androidtv"
 host = "192.0.2.20"       # IP address; atv does no name resolution
+mac = "aa:bb:cc:dd:ee:ff" # optional; Wake-on-LAN fallback for `on`
 ```
 
 `on` / `off` are idempotent on the atv side: it reads the TV's power state over
@@ -298,7 +299,10 @@ the Remote v2 session and sends the power key only when the state differs.
 read/write or introspection. The one-time pairing (`atv pair`, which reads the
 on-screen code from stdin) is interactive, so run `atv` directly for it rather
 than through casa; `casa invoke <name> pair` works too since invoke passes
-through. Power-on over LAN requires the TV's network-standby setting.
+through. Power-on over LAN requires the TV's network-standby setting. A TV in
+deep standby drops off the network entirely; set `mac` and casa passes
+`--mac` to `atv on`, which sends a Wake-on-LAN magic packet and retries when the
+TV is unreachable (`off` never gets it — an unreachable TV is already off).
 
 ### `on` / `off` support and mapping targets
 
